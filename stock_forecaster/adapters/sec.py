@@ -143,9 +143,24 @@ class SecEdgarAdapter:
         gaap = facts.get("facts", {}).get("us-gaap", {})
         url = FILING_INDEX_URL.format(cik=cik)
         records: list[EvidenceRecord] = []
+        latest_end = _latest_period_end(gaap)
         for field, (concepts, kind, definition) in CONCEPTS.items():
             series = _annual_series(gaap, concepts, kind)
             if not series:
+                continue
+            # A concept the filer stopped tagging (e.g. bank debt/loan tags replaced
+            # by newer ones) is dropped rather than reported as current.
+            if latest_end and (latest_end - series[0]["end"]).days > 400:
+                records.append(
+                    unavailable(
+                        "SEC EDGAR",
+                        "filing",
+                        url,
+                        f"{field}: latest us-gaap tag ({series[0]['concept']}) ends "
+                        f"{series[0]['end']}, older than latest filing period {latest_end}",
+                        field=field,
+                    )
+                )
                 continue
             # latest two fiscal years, for growth calculations
             for i, pt in enumerate(series[:2]):
@@ -173,6 +188,16 @@ class SecEdgarAdapter:
         if not records:
             records.append(unavailable("SEC EDGAR", "filing", url, "no us-gaap annual facts"))
         return records
+
+
+def _latest_period_end(gaap: dict[str, Any]) -> date | None:
+    """Most recent annual period end across the core income-statement concepts."""
+    ends = [
+        pt["end"]
+        for concepts, kind, _ in (CONCEPTS["revenue_fy"], CONCEPTS["net_income_fy"])
+        for pt in _annual_series(gaap, concepts, kind)[:1]
+    ]
+    return max(ends) if ends else None
 
 
 def _annual_series(gaap: dict[str, Any], concepts: list[str], kind: str) -> list[dict[str, Any]]:

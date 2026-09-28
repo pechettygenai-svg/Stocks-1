@@ -37,11 +37,18 @@ class EvidenceAdapter(Protocol):
     def collect(self, ticker: str) -> list[EvidenceRecord]: ...
 
 
-def unavailable(source_name: str, source_type: str, url: str | None, reason: str) -> EvidenceRecord:
+def unavailable(
+    source_name: str,
+    source_type: str,
+    url: str | None,
+    reason: str,
+    field: str | None = None,
+) -> EvidenceRecord:
     from ..models import RetrievalStatus, SourceType
 
     return EvidenceRecord(
         claim=f"{source_name} unavailable: {reason}",
+        field=field,
         source_name=source_name,
         source_url=url,
         source_type=SourceType(source_type),
