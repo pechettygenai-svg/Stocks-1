@@ -4,10 +4,12 @@ from __future__ import annotations
 
 import threading
 import uuid
+from pathlib import Path
 from typing import Any
 
 from fastapi import BackgroundTasks, FastAPI, HTTPException
-from fastapi.responses import PlainTextResponse
+from fastapi.responses import FileResponse, PlainTextResponse
+from fastapi.staticfiles import StaticFiles
 
 from .models import DISCLAIMER, AnalysisRequest, AnalysisResult, RunStatus, utc_now
 from .pipeline import run_analysis
@@ -20,6 +22,7 @@ app = FastAPI(
 
 _runs: dict[str, AnalysisResult] = {}
 _lock = threading.Lock()
+_STATIC = Path(__file__).parent / "web"
 
 
 def _execute(run_id: str, request: AnalysisRequest) -> None:
@@ -54,10 +57,38 @@ def _get(run_id: str) -> AnalysisResult:
     return r
 
 
+@app.get("/v1/analyses")
+def list_analyses() -> list[dict[str, Any]]:
+    """Run history (in-memory; newest first)."""
+    with _lock:
+        runs = list(_runs.values())
+    runs.sort(key=lambda r: r.started_at, reverse=True)
+    return [
+        {
+            "run_id": r.run_id,
+            "ticker": r.request.ticker.upper(),
+            "company_name": r.company_name,
+            "horizon": r.request.horizon.value,
+            "status": r.status.value,
+            "started_at": r.started_at.isoformat(),
+            "finished_at": r.finished_at.isoformat() if r.finished_at else None,
+            "quality_gate_failures": len(r.quality_gate_failures),
+            "error": r.error,
+        }
+        for r in runs
+    ]
+
+
 @app.get("/v1/analyses/{run_id}")
 def get_analysis(run_id: str) -> dict[str, Any]:
     r = _get(run_id)
     return r.model_dump(mode="json", exclude={"evidence", "report_markdown"})
+
+
+@app.get("/v1/analyses/{run_id}/full")
+def get_full(run_id: str) -> dict[str, Any]:
+    """Everything the UI needs in one call: result, evidence and report."""
+    return _get(run_id).model_dump(mode="json")
 
 
 @app.get("/v1/analyses/{run_id}/evidence")
@@ -76,3 +107,11 @@ def get_report(run_id: str) -> str:
 @app.get("/healthz")
 def healthz() -> dict[str, str]:
     return {"status": "ok"}
+
+
+@app.get("/", include_in_schema=False)
+def index() -> FileResponse:
+    return FileResponse(_STATIC / "index.html")
+
+
+app.mount("/static", StaticFiles(directory=_STATIC), name="static")

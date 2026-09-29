@@ -29,6 +29,9 @@ stock-forecaster = "stock_forecaster.cli:app"
 [tool.setuptools.packages.find]
 include = ["stock_forecaster*"]
 
+[tool.setuptools.package-data]
+stock_forecaster = ["web/*"]
+
 [tool.ruff]
 line-length = 100
 target-version = "py310"

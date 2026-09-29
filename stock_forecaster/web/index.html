@@ -1,0 +1,87 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Stock Forecasting Agent</title>
+<link rel="stylesheet" href="/static/app.css">
+</head>
+<body>
+<header>
+  <div class="brand">Stock Forecasting Agent</div>
+  <div class="disclaimer" id="disclaimer">This is informational research, not investment advice or a recommendation to buy, sell, or hold a security.</div>
+</header>
+
+<main>
+  <aside>
+    <form id="run-form">
+      <label>Ticker <input name="ticker" id="ticker" placeholder="AAPL" required autocomplete="off" spellcheck="false"></label>
+      <label>Horizon
+        <select name="horizon" id="horizon">
+          <option value="12m">12 months</option>
+          <option value="3y">3 years</option>
+          <option value="5y">5 years</option>
+        </select>
+      </label>
+      <fieldset>
+        <legend>Sources</legend>
+        <label class="inline"><input type="checkbox" name="src" value="yahoo" checked> Yahoo Finance</label>
+        <label class="inline"><input type="checkbox" name="src" value="sec" checked> SEC EDGAR</label>
+        <label class="inline"><input type="checkbox" name="src" value="fidelity" checked> Fidelity (link)</label>
+        <label class="inline"><input type="checkbox" name="src" value="msn" checked> MSN Money (link)</label>
+      </fieldset>
+      <details id="user-forecasts">
+        <summary>Add a forecast you read elsewhere (optional)</summary>
+        <p class="hint">Fidelity/MSN pages are not fetched by this tool. If you read a consensus target there, transcribe it here; it is recorded as an unverified, user-supplied source opinion.</p>
+        <div id="uf-rows"></div>
+        <button type="button" class="ghost" id="uf-add">+ add row</button>
+      </details>
+      <button type="submit" id="run-btn">Analyze</button>
+      <div id="status" class="status"></div>
+    </form>
+
+    <section class="history">
+      <h3>Run history</h3>
+      <ul id="history"></ul>
+    </section>
+  </aside>
+
+  <section id="result" hidden>
+    <div class="result-head">
+      <h2 id="title"></h2>
+      <div class="meta" id="meta"></div>
+      <div class="gates" id="gates"></div>
+    </div>
+    <nav class="tabs" id="tabs">
+      <button data-tab="report" class="active">Report</button>
+      <button data-tab="scenarios">Scenarios</button>
+      <button data-tab="forecasts">Forecast comparison</button>
+      <button data-tab="fundamentals">Fundamentals</button>
+      <button data-tab="valuation">Valuation</button>
+      <button data-tab="evidence">Evidence</button>
+      <button data-tab="review">Review</button>
+    </nav>
+    <div class="panel active" id="tab-report"><article id="report"></article></div>
+    <div class="panel" id="tab-scenarios"></div>
+    <div class="panel" id="tab-forecasts"></div>
+    <div class="panel" id="tab-fundamentals"></div>
+    <div class="panel" id="tab-valuation"></div>
+    <div class="panel" id="tab-evidence">
+      <div class="toolbar">
+        <input id="ev-filter" placeholder="filter evidence (field, source, claim)">
+        <label class="inline"><input type="checkbox" id="ev-unavailable" checked> show unavailable</label>
+      </div>
+      <div id="evidence"></div>
+    </div>
+    <div class="panel" id="tab-review"></div>
+  </section>
+
+  <section id="empty">
+    <h2>Evidence-first stock research</h2>
+    <p>Enter a ticker. The agent collects official filings (SEC EDGAR) and market data (Yahoo Finance) in parallel, stores every observation in an evidence ledger with source and as-of date, recomputes ratios and technicals deterministically, builds bull/base/bear scenarios with a sensitivity grid, compares external forecasts side by side, and runs a critic/auditor pass before the report is released.</p>
+    <p>Fidelity and MSN are listed as cross-check links; their values are never scraped or fabricated.</p>
+  </section>
+</main>
+<script src="/static/app.js"></script>
+</body>
+</html>

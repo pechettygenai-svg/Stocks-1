@@ -2,10 +2,11 @@
 
 from __future__ import annotations
 
+import re
 from datetime import date
 
 from .ledger import EvidenceLedger
-from .models import ForecastComparison, RetrievalStatus, SourceType
+from .models import EvidenceRecord, ForecastComparison, RetrievalStatus, SourceType
 
 STALE_MARKET_DAYS = 5
 STALE_FILING_DAYS = 400
@@ -85,7 +86,13 @@ def validate(ledger: EvidenceLedger, today: date | None = None) -> list[str]:
     return warnings
 
 
-def forecast_panel(ledger: EvidenceLedger, horizon: str) -> list[ForecastComparison]:
+def forecast_panel(
+    ledger: EvidenceLedger, horizon: str, today: date | None = None
+) -> list[ForecastComparison]:
+    """Normalize every external forecast into one comparison row, then flag
+    duplicates (same value + date across aggregators), stale rows and outliers.
+    Rows are never averaged."""
+    today = today or date.today()
     panel: list[ForecastComparison] = []
     lo, mean, hi = (
         ledger.best(f) for f in ("analyst_target_low", "analyst_target_mean", "analyst_target_high")
@@ -97,9 +104,9 @@ def forecast_panel(ledger: EvidenceLedger, horizon: str) -> list[ForecastCompari
                 source="Yahoo Finance (analyst consensus)",
                 forecast_type="analyst price target (consensus)",
                 horizon="12m",
-                value_low=float(lo.value) if lo and isinstance(lo.value, float) else None,
-                value_mean=float(mean.value) if isinstance(mean.value, float) else None,
-                value_high=float(hi.value) if hi and isinstance(hi.value, float) else None,
+                value_low=_num(lo),
+                value_mean=_num(mean),
+                value_high=_num(hi),
                 as_of=mean.as_of,
                 analyst_count=int(count) if count else None,
                 method_disclosed=False,
@@ -108,7 +115,40 @@ def forecast_panel(ledger: EvidenceLedger, horizon: str) -> list[ForecastCompari
                 evidence_ids=[r.id for r in (lo, mean, hi) if r],
             )
         )
+
+    # user-supplied transcriptions, grouped by forecast index
+    groups: dict[str, dict[str, EvidenceRecord]] = {}
+    for r in ledger.all():
+        if r.field and r.field.startswith("user_forecast_"):
+            _, _, idx, kind = r.field.split("_", 3)
+            groups.setdefault(idx, {})[kind] = r
+    for idx in sorted(groups):
+        g = groups[idx]
+        any_r = next(iter(g.values()))
+        n = _analyst_count_from_notes(any_r.notes)
+        panel.append(
+            ForecastComparison(
+                source=any_r.source_name,
+                forecast_type=any_r.definition or "forecast",
+                horizon=any_r.period or horizon,
+                value_low=_num(g.get("low")),
+                value_mean=_num(g.get("mean")),
+                value_high=_num(g.get("high")),
+                as_of=any_r.as_of,
+                analyst_count=n,
+                method_disclosed="method_disclosed=True" in (any_r.notes or ""),
+                weight="low",
+                status=RetrievalStatus.SNIPPET_ONLY,
+                url=any_r.source_url,
+                evidence_ids=[r.id for r in g.values()],
+                notes=["user-supplied transcription; not fetched or verified by this tool"],
+            )
+        )
+
+    linked = {p.source.split(" (")[0].lower() for p in panel}
     for r in ledger.by_field("cross_check_link"):
+        if r.source_name.split(" (")[0].lower() in linked:
+            continue  # user supplied a value for this source
         panel.append(
             ForecastComparison(
                 source=r.source_name,
@@ -120,4 +160,45 @@ def forecast_panel(ledger: EvidenceLedger, horizon: str) -> list[ForecastCompari
                 evidence_ids=[r.id],
             )
         )
+
+    _flag_duplicates_stale_outliers(panel, ledger.value("price_intraday"), today)
     return panel
+
+
+def _num(r: EvidenceRecord | None) -> float | None:
+    return float(r.value) if r is not None and isinstance(r.value, (int, float)) else None
+
+
+def _analyst_count_from_notes(notes: str | None) -> int | None:
+    m = re.search(r"analysts=(\d+)", notes or "")
+    return int(m.group(1)) if m else None
+
+
+def _flag_duplicates_stale_outliers(
+    panel: list[ForecastComparison], price: float | None, today: date
+) -> None:
+    valued = [p for p in panel if p.value_mean is not None]
+    for i, p in enumerate(valued):
+        for q in valued[:i]:
+            same_val = abs((p.value_mean or 0) - (q.value_mean or 0)) <= 0.005 * abs(
+                q.value_mean or 1
+            )
+            same_range = (p.value_low, p.value_high) == (q.value_low, q.value_high)
+            if same_val and (same_range or p.analyst_count == q.analyst_count):
+                p.duplicate_of = q.source
+                p.weight = "duplicate"
+                p.notes.append(
+                    f"identical mean{' and range' if same_range else ''} to {q.source}; "
+                    "likely the same underlying consensus feed, counted once"
+                )
+                break
+        if p.as_of and (today - p.as_of).days > 45:
+            p.stale = True
+            p.notes.append(f"{(today - p.as_of).days} days old")
+    if price and len(valued) >= 2:
+        means = sorted(m.value_mean or 0 for m in valued)
+        median = means[len(means) // 2]
+        for p in valued:
+            if p.value_mean and abs(p.value_mean - median) / median > 0.25:
+                p.outlier = True
+                p.notes.append(f"mean differs from panel median {median:,.2f} by >25%")

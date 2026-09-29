@@ -37,8 +37,16 @@ pip install -e ".[dev]"            # add ,openai or ,anthropic for LLM roles
 ```bash
 export SEC_USER_AGENT="your-app your-email@example.com"   # required by SEC fair-access policy
 stock-forecaster analyze AAPL --horizon 12m --out out/AAPL.md --json-out out/AAPL.json
-stock-forecaster serve --port 8000                         # POST /v1/analyses, GET /v1/analyses/{id}[/evidence|/report]
+stock-forecaster serve --port 8000                         # web UI at http://localhost:8000, Swagger at /docs
 ```
+
+API: `POST /v1/analyses`, `GET /v1/analyses` (history, in-memory), `GET /v1/analyses/{id}[/evidence|/report|/full]`.
+
+The web UI (served from `stock_forecaster/web/`, no build step) has a ticker/horizon form with live
+stage status, the cited report, and tabs for scenarios (with local sliders that re-run the same formula),
+the external forecast comparison panel, fundamentals/technicals, valuation, the evidence ledger, and the
+critic/auditor review. Fidelity/MSN values are never fetched; you may transcribe a target you read there
+and it is stored as a tier-5 `snippet_only` user-supplied opinion, flagged for duplicates/staleness/outliers.
 
 Optional LLM roles (keys are read from the environment and never written to prompts, logs, or reports):
 
@@ -64,6 +72,7 @@ in the suite touches the network.
 
 ## Roadmap
 
-- Phase 2: more permitted forecast sources, duplicate-source detection, critic/auditor revision loop,
-  evaluation set (unprofitable growth, bank, ADR, recent IPO, ambiguous ticker, source outage).
-- Phase 3: web UI, run history, scenario sliders, watchlists (alerts only for data/thesis changes).
+- Done: single-ticker core, forecast comparison with duplicate/stale/outlier flags, critic/auditor
+  revision loop, web UI with run history and scenario sliders.
+- Next: persistent run storage, more permitted forecast sources, fixture evaluation set (unprofitable
+  growth, bank, ADR, recent IPO, ambiguous ticker), watchlists (alerts only for data/thesis changes).

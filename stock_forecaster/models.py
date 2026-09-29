@@ -142,6 +142,41 @@ class ForecastComparison(BaseModel):
     status: RetrievalStatus = RetrievalStatus.VERIFIED
     url: str | None = None
     evidence_ids: list[str] = Field(default_factory=list)
+    duplicate_of: str | None = None
+    stale: bool = False
+    outlier: bool = False
+    notes: list[str] = Field(default_factory=list)
+
+
+class UserForecast(BaseModel):
+    """A forecast the user read on a page we may not fetch (e.g. Fidelity, MSN).
+    Recorded as tier-5 source opinion with the user's as-of date."""
+
+    source: str
+    url: str | None = None
+    forecast_type: str = "analyst price target (consensus)"
+    horizon: str = "12m"
+    value_low: float | None = None
+    value_mean: float | None = None
+    value_high: float | None = None
+    as_of: date | None = None
+    analyst_count: int | None = None
+    method_disclosed: bool = False
+
+
+class ReviewSeverity(str, Enum):
+    INFO = "info"
+    WARNING = "warning"
+    BLOCKING = "blocking"
+
+
+class ReviewFinding(BaseModel):
+    reviewer: str  # critic | auditor
+    check: str
+    severity: ReviewSeverity
+    message: str
+    evidence_ids: list[str] = Field(default_factory=list)
+    resolution: str | None = None
 
 
 class Horizon(str, Enum):
@@ -161,6 +196,7 @@ class AnalysisRequest(BaseModel):
     depth: str = "standard"
     include_sources: list[str] = Field(default_factory=lambda: ["yahoo", "sec", "fidelity", "msn"])
     risk_tolerance: str | None = None
+    user_forecasts: list[UserForecast] = Field(default_factory=list)
 
 
 class RunStatus(str, Enum):
@@ -188,6 +224,8 @@ class AnalysisResult(BaseModel):
     forecasts: list[ForecastComparison] = Field(default_factory=list)
     role_outputs: list[RoleOutput] = Field(default_factory=list)
     validation_warnings: list[str] = Field(default_factory=list)
+    reviews: list[ReviewFinding] = Field(default_factory=list)
     quality_gate_failures: list[str] = Field(default_factory=list)
+    revision_count: int = 0
     report_markdown: str | None = None
     error: str | None = None

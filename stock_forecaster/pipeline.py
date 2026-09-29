@@ -6,7 +6,14 @@ import uuid
 from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor
 
-from .adapters import EvidenceAdapter, SecEdgarAdapter, YahooAdapter, fidelity_adapter, msn_adapter
+from .adapters import (
+    EvidenceAdapter,
+    SecEdgarAdapter,
+    UserForecastAdapter,
+    YahooAdapter,
+    fidelity_adapter,
+    msn_adapter,
+)
 from .analytics import (
     ScenarioInputs,
     build_scenarios,
@@ -20,6 +27,7 @@ from .llm.roles import ROLE_TASKS
 from .models import AnalysisRequest, AnalysisResult, RunStatus, utc_now
 from .quality import run_quality_gates
 from .report import render_report
+from .review import apply_review, deterministic_review, model_review
 from .validation import forecast_panel, validate
 
 StatusCallback = Callable[[RunStatus], None]
@@ -32,7 +40,10 @@ def default_adapters(request: AnalysisRequest) -> list[EvidenceAdapter]:
         "fidelity": fidelity_adapter,
         "msn": msn_adapter,
     }
-    return [registry[s]() for s in request.include_sources if s in registry]
+    adapters = [registry[s]() for s in request.include_sources if s in registry]
+    if request.user_forecasts:
+        adapters.append(UserForecastAdapter(request.user_forecasts))
+    return adapters
 
 
 def run_analysis(
@@ -136,9 +147,16 @@ def run_analysis(
                 )
             )
 
-        # 5. synthesize + gates -----------------------------------------------
+        # 5. draft -> critic/auditor -> revision -> gates ----------------------
         result.evidence = ledger.all()
         result.report_markdown = render_report(result, ledger, provider)
+        result.reviews = deterministic_review(result, ledger) + model_review(
+            result, ledger, provider
+        )
+        if result.reviews:
+            result.role_outputs = apply_review(result, result.reviews)
+            result.revision_count = 1
+            result.report_markdown = render_report(result, ledger, provider)
         result.quality_gate_failures = run_quality_gates(result, ledger)
         if result.quality_gate_failures and provider.name != "none":
             # Model prose failed a gate: drop it and use deterministic synthesis.

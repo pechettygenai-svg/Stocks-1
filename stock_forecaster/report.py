@@ -272,7 +272,11 @@ def render_report(result: AnalysisResult, ledger: EvidenceLedger, provider: LLMP
     if tech:
         o = tech.outputs
         ids = " ".join(f"[{i}]" for i in tech.evidence_ids)
-        lines.append(f"- Trend: {o['trend_label']} {ids}")
+        lines.append(
+            f"\n**Indicators** (formula {tech.formula_version}; inputs {ids}; "
+            f"as of {price.as_of if price else 'n/a'}):"
+        )
+        lines.append(f"- Trend: {o['trend_label']}")
         lines.append(
             f"- 50d SMA {_n(o['sma_50'])} ({_p(o['price_vs_sma50'])} vs price); "
             f"200d SMA {_n(o['sma_200'])} ({_p(o['price_vs_sma200'])} vs price)"
@@ -294,20 +298,26 @@ def render_report(result: AnalysisResult, ledger: EvidenceLedger, provider: LLMP
     lines.append("\n## External forecast comparison")
     lines.append(
         "| Source | Forecast type | Horizon | Value/range | Date | Analysts | "
-        "Method disclosed? | Weight | Evidence |"
+        "Method disclosed? | Weight | Flags | Evidence |"
     )
-    lines.append("|---|---|---|---|---|---|---|---|---|")
+    lines.append("|---|---|---|---|---|---|---|---|---|---|")
     for f in result.forecasts:
         rng = (
             "unavailable"
             if f.status == RetrievalStatus.UNAVAILABLE
             else f"{_n(f.value_low)} / {_n(f.value_mean)} / {_n(f.value_high)} (low/mean/high)"
         )
+        flags = [
+            *(["duplicate of " + f.duplicate_of] if f.duplicate_of else []),
+            *(["stale"] if f.stale else []),
+            *(["outlier"] if f.outlier else []),
+            *(["user-supplied"] if f.status == RetrievalStatus.SNIPPET_ONLY else []),
+        ]
         lines.append(
-            f"| [{f.source}]({f.url}) | {f.forecast_type} | {f.horizon} | {rng} | "
+            f"| {f'[{f.source}]({f.url})' if f.url else f.source} | {f.forecast_type} | {f.horizon} | {rng} | "
             f"{f.as_of or 'n/a'} | {f.analyst_count or 'n/a'} | "
             f"{'yes' if f.method_disclosed else 'no'} | {f.weight} | "
-            f"{' '.join(f'[{i}]' for i in f.evidence_ids)} |"
+            f"{', '.join(flags) or '—'} | {' '.join(f'[{i}]' for i in f.evidence_ids)} |"
         )
     lines.append(
         "\nValues from different sources are not averaged; consensus figures are opaque "
@@ -318,6 +328,21 @@ def render_report(result: AnalysisResult, ledger: EvidenceLedger, provider: LLMP
     # Catalysts & risks -----------------------------------------------------
     lines.append("\n## Catalysts and risks")
     lines += _role_section(result, ("catalyst_risk", "skeptic"))
+
+    # Review notes ----------------------------------------------------------
+    if result.reviews:
+        lines.append("\n## Review notes")
+        lines.append(
+            f"Critic and auditor pass (revision {result.revision_count}). Findings and how "
+            "the draft was revised:"
+        )
+        lines.append("| Reviewer | Check | Severity | Finding | Resolution |")
+        lines.append("|---|---|---|---|---|")
+        for rv in result.reviews:
+            lines.append(
+                f"| {rv.reviewer} | {rv.check} | {rv.severity.value} | {rv.message} | "
+                f"{rv.resolution or 'open'} |"
+            )
 
     # Limitations -----------------------------------------------------------
     lines.append("\n## Limitations")
@@ -340,6 +365,10 @@ def render_report(result: AnalysisResult, ledger: EvidenceLedger, provider: LLMP
         "- Scenario drivers are mechanical extrapolations of one or two fiscal years and "
         "current multiples; they are assumptions to be argued with, not forecasts."
     )
+    open_reviews = [rv for rv in result.reviews if rv.resolution is None]
+    if open_reviews:
+        lines.append("- Unresolved review findings:")
+        lines += [f"  - [{rv.reviewer}/{rv.severity.value}] {rv.message}" for rv in open_reviews]
     lines.append(
         "- Analyst roles ran with model: "
         + ", ".join(sorted({ro.model or "n/a" for ro in result.role_outputs}))
