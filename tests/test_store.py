@@ -65,3 +65,14 @@ def test_pipeline_crash_is_recorded_not_lost(monkeypatch):
     run_id = client.post("/v1/analyses", json={"ticker": "AAPL"}).json()["run_id"]
     r = client.get(f"/v1/analyses/{run_id}").json()
     assert r["status"] == "failed" and "adapter exploded" in r["error"]
+
+
+def test_active_run_cannot_be_deleted(aapl_result):
+    import stock_forecaster.api as api
+
+    store = api.get_store()
+    queued = aapl_result.model_copy(update={"run_id": "run-q", "status": RunStatus.COLLECTING})
+    store.save(queued)
+    client = TestClient(api.app)
+    assert client.delete("/v1/analyses/run-q").status_code == 409
+    assert store.get("run-q") is not None
