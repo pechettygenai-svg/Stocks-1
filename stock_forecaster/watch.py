@@ -88,12 +88,15 @@ def snapshot(result: AnalysisResult) -> Snapshot:
         elif e.field in CONSENSUS_FIELDS and e.value is not None:
             data[f"consensus:{e.field}"] = {"value": e.value}
     for f in result.forecasts:
-        data[f"forecast:{f.source}"] = {
+        # A source can contribute both a price-target row and a rating-mix row.
+        suffix = " (rating mix)" if f.ratings is not None else ""
+        data[f"forecast:{f.source}{suffix}"] = {
             "status": f.status.value,
             "low": f.value_low,
             "mean": f.value_mean,
             "high": f.value_high,
             "analyst_count": f.analyst_count,
+            "rating_mean": f.rating_mean,
         }
     # Keyed by source + field, not the claim text: a continuing outage whose error
     # message changes is not an availability change.
@@ -205,6 +208,13 @@ def diff(prev: Snapshot, cur: Snapshot) -> list[Change]:
                     and _reaches(abs(ac - bc), ANALYST_COUNT_ABS)
                 ):
                     moved.append(f"analysts {bc} -> {ac}")
+                br, ar = b.get("rating_mean"), a.get("rating_mean")
+                if (
+                    isinstance(br, int | float)
+                    and isinstance(ar, int | float)
+                    and _reaches(abs(ar - br), RECOMMENDATION_ABS)
+                ):
+                    moved.append(f"rating mean {br} -> {ar}")
                 if not moved:
                     continue
                 msg = f"{name}: " + ", ".join(moved)
