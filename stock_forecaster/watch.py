@@ -210,7 +210,7 @@ def diff(prev: Snapshot, cur: Snapshot) -> list[Change]:
                 if (
                     isinstance(br, int | float)
                     and isinstance(ar, int | float)
-                    and abs(ar - br) >= RECOMMENDATION_ABS
+                    and _reaches(abs(ar - br), RECOMMENDATION_ABS)
                 ):
                     moved.append(f"rating mean {br} -> {ar}")
                 if not moved:
