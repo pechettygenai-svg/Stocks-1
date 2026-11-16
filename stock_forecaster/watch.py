@@ -284,25 +284,24 @@ def check_item(
         return ItemCheck(ticker=ticker, run_id=result.run_id, status="failed", error=result.error)
 
     cur = snapshot(result)
-    prev_json = store.item_baseline(watchlist_id, ticker)
-    store.update_item(
-        watchlist_id, ticker, run_id=result.run_id, baseline=cur.model_dump_json(), error=None
+
+    def decide(prev_json: str) -> tuple[str | None, list[dict[str, Any]]]:
+        prev = Snapshot.model_validate_json(prev_json)
+        return prev.run_id, [c.model_dump(mode="json") for c in diff(prev, cur)]
+
+    had_baseline, alert_id, changes = store.advance_baseline(
+        watchlist_id, ticker, run_id=result.run_id, baseline=cur.model_dump_json(), decide=decide
     )
-    if prev_json is None:
+    if not had_baseline:
         return ItemCheck(ticker=ticker, run_id=result.run_id, status="baseline")
-    prev = Snapshot.model_validate_json(prev_json)
-    changes = diff(prev, cur)
-    if not changes:
+    if alert_id is None:
         return ItemCheck(ticker=ticker, run_id=result.run_id, status="unchanged")
-    alert_id = store.add_alert(
-        watchlist_id,
-        ticker,
-        run_id=result.run_id,
-        prev_run_id=prev.run_id,
-        changes=[c.model_dump(mode="json") for c in changes],
-    )
     return ItemCheck(
-        ticker=ticker, run_id=result.run_id, status="alert", alert_id=alert_id, changes=changes
+        ticker=ticker,
+        run_id=result.run_id,
+        status="alert",
+        alert_id=alert_id,
+        changes=[Change.model_validate(c) for c in changes],
     )
 
 

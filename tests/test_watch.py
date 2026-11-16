@@ -187,3 +187,23 @@ def test_price_already_outside_range_does_not_realert(aapl_result):
     again = _variant(aapl_result, "run-3", price_intraday=lo * 0.88)
     assert any(c.key == "scenario_range" for c in diff(snapshot(aapl_result), snapshot(below)))
     assert not any(c.key == "scenario_range" for c in diff(snapshot(below), snapshot(again)))
+
+
+def test_failed_alert_insert_rolls_back_baseline(aapl_result, isolated_db, monkeypatch):
+    import sqlite3
+
+    import pytest
+
+    store = RunStore(isolated_db)
+    wl = store.create_watchlist("core", "12m", ["AAPL"])
+    check_item(store, wl, "AAPL", "12m", lambda req: aapl_result)
+    changed = _variant(aapl_result, "run-x", eps_forward=999.0)
+    store._db.execute(
+        "CREATE TRIGGER boom BEFORE INSERT ON alerts BEGIN SELECT RAISE(ABORT, 'disk full'); END"
+    )
+    with pytest.raises(sqlite3.IntegrityError):
+        check_item(store, wl, "AAPL", "12m", lambda req: changed)
+    store._db.execute("DROP TRIGGER boom")
+    # baseline was not advanced, so the retry still sees the change
+    retry = check_item(store, wl, "AAPL", "12m", lambda req: changed)
+    assert retry.status == "alert" and len(store.list_alerts()) == 1

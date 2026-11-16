@@ -10,6 +10,7 @@ import json
 import os
 import sqlite3
 import threading
+from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
@@ -257,6 +258,51 @@ class RunStore:
                 "WHERE watchlist_id = ? AND ticker = ?",
                 args,
             )
+
+    def advance_baseline(
+        self,
+        wl_id: int,
+        ticker: str,
+        *,
+        run_id: str,
+        baseline: str,
+        decide: Callable[[str], tuple[str | None, list[dict[str, Any]]]],
+    ) -> tuple[bool, int | None, list[dict[str, Any]]]:
+        """Swap in a new baseline and record any alert in one write transaction.
+        `decide(prev_baseline)` returns (prev_run_id, changes). Returns
+        (had_baseline, alert_id, changes). BEGIN IMMEDIATE serializes concurrent
+        checks (other threads or processes) on the same DB, so two checks cannot
+        both diff against the same old baseline, and a failed alert insert rolls
+        the baseline back so the change is reported on the next check."""
+        with self._lock, self._db:
+            self._db.execute("BEGIN IMMEDIATE")
+            row = self._db.execute(
+                "SELECT baseline_json FROM watchlist_items WHERE watchlist_id = ? AND ticker = ?",
+                (wl_id, ticker),
+            ).fetchone()
+            prev = row["baseline_json"] if row else None
+            prev_run_id, changes = decide(prev) if prev is not None else (None, [])
+            self._db.execute(
+                "UPDATE watchlist_items SET last_checked_at = ?, last_error = NULL, "
+                "last_run_id = ?, baseline_json = ? WHERE watchlist_id = ? AND ticker = ?",
+                (utc_now().isoformat(), run_id, baseline, wl_id, ticker),
+            )
+            alert_id = None
+            if changes:
+                cur = self._db.execute(
+                    "INSERT INTO alerts (watchlist_id, ticker, run_id, prev_run_id, created_at, "
+                    "changes_json) VALUES (?,?,?,?,?,?)",
+                    (
+                        wl_id,
+                        ticker,
+                        run_id,
+                        prev_run_id,
+                        utc_now().isoformat(),
+                        json.dumps(changes),
+                    ),
+                )
+                alert_id = int(cur.lastrowid or 0)
+        return prev is not None, alert_id, changes
 
     def add_alert(
         self,
