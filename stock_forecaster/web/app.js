@@ -169,11 +169,11 @@
     const list = $("#history");
     try {
       const runs = await api("/v1/analyses");
-      if (!runs.length) { list.innerHTML = '<li class="s">No runs yet (history is in-memory; it clears on server restart).</li>'; return; }
+      if (!runs.length) { list.innerHTML = '<li class="s">No runs yet.</li>'; return; }
       list.innerHTML = runs.map((r) => `
         <li data-run="${esc(r.run_id)}">
           <span><span class="t">${esc(r.ticker)}</span> <span class="s">${esc(r.horizon)}</span></span>
-          <span class="s">${esc((r.started_at || "").slice(11, 19))} · ${esc(r.status)}${r.quality_gate_failures ? ` · ${r.quality_gate_failures} gate` : ""}</span>
+          <span class="s">${esc((r.started_at || "").slice(0, 16).replace("T", " "))} UTC · ${esc(r.status)}${r.quality_gate_failures ? ` · ${r.quality_gate_failures} gate` : ""}</span>
         </li>`).join("");
       $$("li[data-run]", list).forEach((li) => li.addEventListener("click", () => show(li.dataset.run)));
     } catch (e) { list.innerHTML = `<li class="error">${esc(e.message)}</li>`; }

@@ -34,3 +34,17 @@ def aapl_result(aapl_yahoo, aapl_sec):
         msn_adapter(),
     ]
     return run_analysis(AnalysisRequest(ticker="AAPL"), adapters=adapters, provider=NullProvider())
+
+
+@pytest.fixture(autouse=True)
+def isolated_db(tmp_path, monkeypatch):
+    """Every test gets its own SQLite file; never the user's ~/.stock_forecaster."""
+    import stock_forecaster.api as api
+
+    path = tmp_path / "runs.db"
+    monkeypatch.setenv("STOCK_FORECASTER_DB", str(path))
+    monkeypatch.setattr(api, "_store", None)
+    yield path
+    if api._store is not None:
+        api._store.close()
+        api._store = None

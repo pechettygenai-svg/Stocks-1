@@ -46,9 +46,22 @@ def analyze(
 
 
 @app.command()
-def serve(host: str = "127.0.0.1", port: int = 8000) -> None:
+def serve(
+    host: str = "127.0.0.1",
+    port: int = 8000,
+    db: str = typer.Option(
+        None,
+        help="SQLite run-history file (default: $STOCK_FORECASTER_DB "
+        "or ~/.stock_forecaster/runs.db)",
+    ),
+) -> None:
     """Run the HTTP API."""
+    import os  # noqa: PLC0415
+
     import uvicorn  # noqa: PLC0415
+
+    if db:
+        os.environ["STOCK_FORECASTER_DB"] = db
 
     uvicorn.run("stock_forecaster.api:app", host=host, port=port)
 
