@@ -35,24 +35,27 @@ app = FastAPI(
 
 _STATIC = Path(__file__).parent / "web"
 _store: RunStore | None = None
+_store_lock = threading.Lock()
 
 
 def get_store() -> RunStore:
     """Opened lazily so `STOCK_FORECASTER_DB` (or `configure_store`) applies."""
     global _store
-    if _store is None:
-        configure_store()
-    assert _store is not None
-    return _store
+    with _store_lock:
+        if _store is None:
+            _store = RunStore()
+            _store.mark_interrupted()
+        return _store
 
 
 def configure_store(path: str | None = None) -> RunStore:
     global _store
-    if _store is not None:
-        _store.close()
-    _store = RunStore(path)
-    _store.mark_interrupted()
-    return _store
+    with _store_lock:
+        if _store is not None:
+            _store.close()
+        _store = RunStore(path)
+        _store.mark_interrupted()
+        return _store
 
 
 def _execute(run_id: str, request: AnalysisRequest) -> None:
@@ -104,8 +107,10 @@ def list_analyses(ticker: str | None = None, limit: int = 200) -> list[dict[str,
 
 @app.delete("/v1/analyses/{run_id}", status_code=204)
 def delete_analysis(run_id: str) -> None:
-    if not get_store().delete(run_id):
-        raise HTTPException(404, "run not found")
+    r = _get(run_id)
+    if r.status not in (RunStatus.COMPLETE, RunStatus.FAILED):
+        raise HTTPException(409, f"run is {r.status.value}; delete it after it finishes")
+    get_store().delete(run_id)
 
 
 @app.get("/v1/analyses/{run_id}")
