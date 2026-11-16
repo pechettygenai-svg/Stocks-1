@@ -287,6 +287,8 @@ def _flag_duplicates_stale_outliers(
                     "likely the same underlying consensus feed, counted once"
                 )
                 break
+    # Staleness applies to every dated row, including rating mixes without a price.
+    for p in panel:
         if p.as_of and (today - p.as_of).days > 45:
             p.stale = True
             p.notes.append(f"{(today - p.as_of).days} days old")

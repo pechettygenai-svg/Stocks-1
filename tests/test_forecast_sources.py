@@ -148,3 +148,22 @@ def test_target_only_change_alerts_alongside_rating_mix(aapl_yahoo, aapl_sec):
     after = _run(aapl_yahoo, aapl_sec, FinnhubAdapter(payloads=moved))
     msgs = [c.message for c in diff(snapshot(before), snapshot(after))]
     assert any("Finnhub" in m and "mean 312.5 -> 340.0" in m for m in msgs)
+
+
+def test_old_rating_mix_is_flagged_stale(aapl_yahoo, aapl_sec):
+    old = {
+        **PAYLOADS["finnhub"],
+        "recommendation": [
+            {
+                "buy": 1,
+                "hold": 1,
+                "period": "2024-01-01",
+                "sell": 0,
+                "strongBuy": 1,
+                "strongSell": 0,
+            }
+        ],
+    }
+    result = _run(aapl_yahoo, aapl_sec, FinnhubAdapter(payloads=old))
+    mix = _rows(result, "Finnhub")["analyst rating mix"]
+    assert mix.stale and any("days old" in n for n in mix.notes)
