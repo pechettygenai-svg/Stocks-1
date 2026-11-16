@@ -40,6 +40,19 @@
       <div id="status" class="status"></div>
     </form>
 
+    <section class="history watch" id="watch">
+      <h3>Watchlists</h3>
+      <p class="hint">Re-checks alert only when filings, consensus or source availability change, or the thesis shifts (scenario mode, red flags, gates, price leaving the prior scenario range). Price drift alone is silent.</p>
+      <form id="wl-form" class="wl-form">
+        <input id="wl-name" placeholder="new list name" required>
+        <input id="wl-tickers" placeholder="tickers, e.g. AAPL, JPM">
+        <button type="submit" class="ghost">+ create</button>
+      </form>
+      <div id="wl-lists"></div>
+      <h3>Alerts</h3>
+      <ul id="alerts"></ul>
+    </section>
+
     <section class="history">
       <h3>Run history</h3>
       <ul id="history"></ul>

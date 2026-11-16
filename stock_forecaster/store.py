@@ -6,9 +6,11 @@ One row per run: summary columns for the history list, plus the full
 
 from __future__ import annotations
 
+import json
 import os
 import sqlite3
 import threading
+from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
@@ -33,6 +35,33 @@ CREATE TABLE IF NOT EXISTS runs (
 );
 CREATE INDEX IF NOT EXISTS runs_started ON runs (started_at DESC);
 CREATE INDEX IF NOT EXISTS runs_ticker ON runs (ticker, started_at DESC);
+CREATE TABLE IF NOT EXISTS watchlists (
+    id         INTEGER PRIMARY KEY AUTOINCREMENT,
+    name       TEXT NOT NULL UNIQUE,
+    horizon    TEXT NOT NULL,
+    created_at TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS watchlist_items (
+    watchlist_id    INTEGER NOT NULL REFERENCES watchlists(id) ON DELETE CASCADE,
+    ticker          TEXT NOT NULL,
+    added_at        TEXT NOT NULL,
+    last_run_id     TEXT,
+    last_checked_at TEXT,
+    last_error      TEXT,
+    baseline_json   TEXT,
+    PRIMARY KEY (watchlist_id, ticker)
+);
+CREATE TABLE IF NOT EXISTS alerts (
+    id           INTEGER PRIMARY KEY AUTOINCREMENT,
+    watchlist_id INTEGER NOT NULL REFERENCES watchlists(id) ON DELETE CASCADE,
+    ticker       TEXT NOT NULL,
+    run_id       TEXT NOT NULL,
+    prev_run_id  TEXT,
+    created_at   TEXT NOT NULL,
+    changes_json TEXT NOT NULL,
+    acknowledged INTEGER NOT NULL DEFAULT 0
+);
+CREATE INDEX IF NOT EXISTS alerts_wl ON alerts (watchlist_id, created_at DESC);
 """
 
 
@@ -48,6 +77,7 @@ class RunStore:
         self._lock = threading.Lock()
         self._db = sqlite3.connect(self.path, check_same_thread=False)
         self._db.row_factory = sqlite3.Row
+        self._db.execute("PRAGMA foreign_keys = ON")
         with self._lock, self._db:
             if self.path != ":memory:":
                 self._db.execute("PRAGMA journal_mode=WAL")
@@ -85,7 +115,7 @@ class RunStore:
         r.status = RunStatus(row["status"])
         return r
 
-    def list(self, ticker: str | None = None, limit: int = 200) -> list[dict[str, Any]]:
+    def list_runs(self, ticker: str | None = None, limit: int = 200) -> list[dict[str, Any]]:
         sql = "SELECT * FROM runs"
         args: list[Any] = []
         if ticker:
@@ -130,6 +160,195 @@ class RunStore:
             r.finished_at = utc_now()
             self.save(r)
         return len(rows)
+
+    # ---------- watchlists ----------
+    def create_watchlist(self, name: str, horizon: str, tickers: list[str]) -> int:
+        now = utc_now().isoformat()
+        with self._lock, self._db:
+            cur = self._db.execute(
+                "INSERT INTO watchlists (name, horizon, created_at) VALUES (?,?,?)",
+                (name, horizon, now),
+            )
+            wl_id = int(cur.lastrowid or 0)
+            self._db.executemany(
+                "INSERT OR IGNORE INTO watchlist_items (watchlist_id, ticker, added_at) "
+                "VALUES (?,?,?)",
+                [(wl_id, t, now) for t in tickers],
+            )
+        return wl_id
+
+    def list_watchlists(self) -> list[dict[str, Any]]:
+        with self._lock:
+            rows = self._db.execute(
+                "SELECT w.*, "
+                "(SELECT COUNT(*) FROM watchlist_items i WHERE i.watchlist_id = w.id) AS n_items, "
+                "(SELECT COUNT(*) FROM alerts a WHERE a.watchlist_id = w.id "
+                " AND a.acknowledged = 0) AS open_alerts "
+                "FROM watchlists w ORDER BY w.name"
+            ).fetchall()
+        return [dict(r) for r in rows]
+
+    def get_watchlist(self, wl_id: int) -> dict[str, Any] | None:
+        with self._lock:
+            wl = self._db.execute("SELECT * FROM watchlists WHERE id = ?", (wl_id,)).fetchone()
+            if wl is None:
+                return None
+            items = self._db.execute(
+                "SELECT ticker, added_at, last_run_id, last_checked_at, last_error, "
+                "baseline_json IS NOT NULL AS has_baseline FROM watchlist_items "
+                "WHERE watchlist_id = ? ORDER BY ticker",
+                (wl_id,),
+            ).fetchall()
+        out = dict(wl)
+        out["items"] = [dict(i, has_baseline=bool(i["has_baseline"])) for i in items]
+        return out
+
+    def delete_watchlist(self, wl_id: int) -> bool:
+        with self._lock, self._db:
+            cur = self._db.execute("DELETE FROM watchlists WHERE id = ?", (wl_id,))
+        return cur.rowcount > 0
+
+    def add_item(self, wl_id: int, ticker: str) -> None:
+        with self._lock, self._db:
+            self._db.execute(
+                "INSERT OR IGNORE INTO watchlist_items (watchlist_id, ticker, added_at) "
+                "VALUES (?,?,?)",
+                (wl_id, ticker, utc_now().isoformat()),
+            )
+
+    def remove_item(self, wl_id: int, ticker: str) -> bool:
+        with self._lock, self._db:
+            cur = self._db.execute(
+                "DELETE FROM watchlist_items WHERE watchlist_id = ? AND ticker = ?",
+                (wl_id, ticker),
+            )
+        return cur.rowcount > 0
+
+    def item_baseline(self, wl_id: int, ticker: str) -> str | None:
+        with self._lock:
+            row = self._db.execute(
+                "SELECT baseline_json FROM watchlist_items WHERE watchlist_id = ? AND ticker = ?",
+                (wl_id, ticker),
+            ).fetchone()
+        return row["baseline_json"] if row else None
+
+    def update_item(
+        self,
+        wl_id: int,
+        ticker: str,
+        *,
+        run_id: str | None = None,
+        baseline: str | None = None,
+        error: str | None = None,
+    ) -> None:
+        """Record a check. `baseline` is only replaced when given, so a failed run
+        keeps the previous baseline."""
+        sets = ["last_checked_at = ?", "last_error = ?"]
+        args: list[Any] = [utc_now().isoformat(), error]
+        if run_id is not None:
+            sets.append("last_run_id = ?")
+            args.append(run_id)
+        if baseline is not None:
+            sets.append("baseline_json = ?")
+            args.append(baseline)
+        args += [wl_id, ticker]
+        with self._lock, self._db:
+            self._db.execute(
+                f"UPDATE watchlist_items SET {', '.join(sets)} "
+                "WHERE watchlist_id = ? AND ticker = ?",
+                args,
+            )
+
+    def advance_baseline(
+        self,
+        wl_id: int,
+        ticker: str,
+        *,
+        run_id: str,
+        baseline: str,
+        decide: Callable[[str], tuple[str | None, list[dict[str, Any]]]],
+    ) -> tuple[bool, int | None, list[dict[str, Any]]]:
+        """Swap in a new baseline and record any alert in one write transaction.
+        `decide(prev_baseline)` returns (prev_run_id, changes). Returns
+        (had_baseline, alert_id, changes). BEGIN IMMEDIATE serializes concurrent
+        checks (other threads or processes) on the same DB, so two checks cannot
+        both diff against the same old baseline, and a failed alert insert rolls
+        the baseline back so the change is reported on the next check."""
+        with self._lock, self._db:
+            self._db.execute("BEGIN IMMEDIATE")
+            row = self._db.execute(
+                "SELECT baseline_json FROM watchlist_items WHERE watchlist_id = ? AND ticker = ?",
+                (wl_id, ticker),
+            ).fetchone()
+            prev = row["baseline_json"] if row else None
+            prev_run_id, changes = decide(prev) if prev is not None else (None, [])
+            self._db.execute(
+                "UPDATE watchlist_items SET last_checked_at = ?, last_error = NULL, "
+                "last_run_id = ?, baseline_json = ? WHERE watchlist_id = ? AND ticker = ?",
+                (utc_now().isoformat(), run_id, baseline, wl_id, ticker),
+            )
+            alert_id = None
+            if changes:
+                cur = self._db.execute(
+                    "INSERT INTO alerts (watchlist_id, ticker, run_id, prev_run_id, created_at, "
+                    "changes_json) VALUES (?,?,?,?,?,?)",
+                    (
+                        wl_id,
+                        ticker,
+                        run_id,
+                        prev_run_id,
+                        utc_now().isoformat(),
+                        json.dumps(changes),
+                    ),
+                )
+                alert_id = int(cur.lastrowid or 0)
+        return prev is not None, alert_id, changes
+
+    def add_alert(
+        self,
+        wl_id: int,
+        ticker: str,
+        *,
+        run_id: str,
+        prev_run_id: str | None,
+        changes: list[dict[str, Any]],
+    ) -> int:
+        with self._lock, self._db:
+            cur = self._db.execute(
+                "INSERT INTO alerts (watchlist_id, ticker, run_id, prev_run_id, created_at, "
+                "changes_json) VALUES (?,?,?,?,?,?)",
+                (wl_id, ticker, run_id, prev_run_id, utc_now().isoformat(), json.dumps(changes)),
+            )
+        return int(cur.lastrowid or 0)
+
+    def list_alerts(
+        self, wl_id: int | None = None, include_acknowledged: bool = False, limit: int = 200
+    ) -> list[dict[str, Any]]:
+        sql = "SELECT a.*, w.name AS watchlist FROM alerts a JOIN watchlists w ON w.id = a.watchlist_id"
+        where, args = [], []
+        if wl_id is not None:
+            where.append("a.watchlist_id = ?")
+            args.append(wl_id)
+        if not include_acknowledged:
+            where.append("a.acknowledged = 0")
+        if where:
+            sql += " WHERE " + " AND ".join(where)
+        sql += " ORDER BY a.id DESC LIMIT ?"
+        args.append(limit)
+        with self._lock:
+            rows = self._db.execute(sql, args).fetchall()
+        out = []
+        for r in rows:
+            d = dict(r)
+            d["changes"] = json.loads(d.pop("changes_json"))
+            d["acknowledged"] = bool(d["acknowledged"])
+            out.append(d)
+        return out
+
+    def ack_alert(self, alert_id: int) -> bool:
+        with self._lock, self._db:
+            cur = self._db.execute("UPDATE alerts SET acknowledged = 1 WHERE id = ?", (alert_id,))
+        return cur.rowcount > 0
 
     def close(self) -> None:
         with self._lock:

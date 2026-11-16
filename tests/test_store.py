@@ -13,9 +13,9 @@ def test_round_trip_survives_reopen(aapl_result, isolated_db):
     back = reopened.get(aapl_result.run_id)
     assert back is not None
     assert back.model_dump(mode="json") == aapl_result.model_dump(mode="json")
-    [row] = reopened.list()
+    [row] = reopened.list_runs()
     assert row["ticker"] == "AAPL" and row["status"] == "complete"
-    assert reopened.list(ticker="MSFT") == []
+    assert reopened.list_runs(ticker="MSFT") == []
 
 
 def test_interrupted_runs_are_failed_on_restart(isolated_db):

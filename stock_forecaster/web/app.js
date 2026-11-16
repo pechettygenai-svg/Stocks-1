@@ -179,6 +179,122 @@
     } catch (e) { list.innerHTML = `<li class="error">${esc(e.message)}</li>`; }
   }
 
+  // ---------- watchlists ----------
+  const wlTimers = {};
+  async function send(path, method, body) {
+    const r = await fetch(path, {
+      method,
+      headers: body ? { "content-type": "application/json" } : {},
+      body: body ? JSON.stringify(body) : undefined,
+    });
+    if (!r.ok) {
+      let msg = `${r.status}`;
+      try { msg = (await r.json()).detail || msg; } catch (_) { /* no body */ }
+      throw new Error(msg);
+    }
+    return r.status === 204 ? null : r.json();
+  }
+
+  async function loadWatchlists() {
+    const box = $("#wl-lists");
+    try {
+      const lists = await api("/v1/watchlists");
+      if (!lists.length) { box.innerHTML = '<p class="s hint">No watchlists yet.</p>'; }
+      else {
+        const full = await Promise.all(lists.map((w) => api(`/v1/watchlists/${w.id}`)));
+        box.innerHTML = full.map((w, i) => `
+          <div class="wl" data-wl="${w.id}">
+            <div class="wl-head">
+              <span><span class="t">${esc(w.name)}</span> <span class="s">${esc(w.horizon)}${lists[i].open_alerts ? ` · <span class="badge warn">${lists[i].open_alerts} alert</span>` : ""}</span></span>
+              <span>
+                <button class="wl-check" ${w.checking || !w.items.length ? "disabled" : ""}>${w.checking ? "checking…" : "Check now"}</button>
+                <button class="wl-del ghosty" title="delete list">×</button>
+              </span>
+            </div>
+            <div class="wl-items">${w.items.map((it) => `
+              <span class="chip ${it.last_error ? "err" : it.has_baseline ? "" : "pending"}" data-run="${esc(it.last_run_id || "")}" data-t="${esc(it.ticker)}"
+                title="${esc(it.last_error ? "last check failed: " + it.last_error : it.last_checked_at ? "checked " + it.last_checked_at.slice(0, 16).replace("T", " ") + " UTC" : "not checked yet; first check sets the baseline")}">${esc(it.ticker)}<span class="x" title="remove">×</span></span>`).join("")}
+            </div>
+            <form class="wl-add"><input placeholder="add ticker"><button class="ghost" type="submit">+</button></form>
+          </div>`).join("");
+        full.forEach((w) => { if (w.checking) pollWatchlist(w.id); });
+      }
+    } catch (e) { box.innerHTML = `<p class="error">${esc(e.message)}</p>`; }
+    loadAlerts();
+  }
+
+  function pollWatchlist(id) {
+    clearTimeout(wlTimers[id]);
+    wlTimers[id] = setTimeout(async () => {
+      const w = await api(`/v1/watchlists/${id}`).catch(() => null);
+      if (w && w.checking) return pollWatchlist(id);
+      loadWatchlists();
+      loadHistory();
+    }, 1500);
+  }
+
+  async function loadAlerts() {
+    const list = $("#alerts");
+    try {
+      const alerts = await api("/v1/alerts");
+      if (!alerts.length) { list.innerHTML = '<li class="s">No open alerts.</li>'; return; }
+      list.innerHTML = alerts.map((a) => `
+        <li>
+          <button data-ack="${a.id}">dismiss</button>
+          <span class="t">${esc(a.ticker)}</span> <span class="s">${esc(a.watchlist)} · ${esc(a.created_at.slice(0, 16).replace("T", " "))} UTC ·
+          <a href="#" data-run="${esc(a.run_id)}">open run</a></span>
+          ${a.changes.map((c) => `<div class="chg ${esc(c.kind)}">[${esc(c.kind)}] ${esc(c.message)}</div>`).join("")}
+        </li>`).join("");
+    } catch (e) { list.innerHTML = `<li class="error">${esc(e.message)}</li>`; }
+  }
+
+  $("#wl-form").addEventListener("submit", async (ev) => {
+    ev.preventDefault();
+    const tickers = $("#wl-tickers").value.split(/[,\s]+/).filter(Boolean);
+    try {
+      await send("/v1/watchlists", "POST", { name: $("#wl-name").value, horizon: $("#horizon").value, tickers });
+      $("#wl-name").value = ""; $("#wl-tickers").value = "";
+      loadWatchlists();
+    } catch (e) { alert(e.message); }
+  });
+
+  $("#watch").addEventListener("click", async (ev) => {
+    const t = ev.target;
+    const wl = t.closest("[data-wl]");
+    const id = wl && wl.dataset.wl;
+    try {
+      if (t.classList.contains("wl-check")) {
+        t.disabled = true; t.textContent = "checking…";
+        await send(`/v1/watchlists/${id}/check`, "POST");
+        pollWatchlist(id);
+      } else if (t.classList.contains("wl-del")) {
+        if (confirm("Delete this watchlist and its alerts?")) { await send(`/v1/watchlists/${id}`, "DELETE"); loadWatchlists(); }
+      } else if (t.classList.contains("x")) {
+        await send(`/v1/watchlists/${id}/tickers/${encodeURIComponent(t.parentElement.dataset.t)}`, "DELETE");
+        loadWatchlists();
+      } else if (t.classList.contains("chip") && t.dataset.run) {
+        show(t.dataset.run);
+      } else if (t.dataset.ack) {
+        await send(`/v1/alerts/${t.dataset.ack}/ack`, "POST");
+        loadWatchlists();
+      } else if (t.tagName === "A" && t.dataset.run) {
+        ev.preventDefault();
+        show(t.dataset.run);
+      }
+    } catch (e) { alert(e.message); }
+  });
+
+  $("#watch").addEventListener("submit", async (ev) => {
+    if (!ev.target.classList.contains("wl-add")) return;
+    ev.preventDefault();
+    const input = $("input", ev.target);
+    const id = ev.target.closest("[data-wl]").dataset.wl;
+    try {
+      await send(`/v1/watchlists/${id}/tickers`, "POST", { ticker: input.value });
+      loadWatchlists();
+    } catch (e) { alert(e.message); }
+  });
+
   // ---------- result rendering ----------
   async function show(runId) {
     const res = await api(`/v1/analyses/${runId}/full`);
@@ -415,4 +531,5 @@
   $$("#tabs button").forEach((b) => b.addEventListener("click", () => activateTab(b.dataset.tab)));
 
   loadHistory();
+  loadWatchlists();
 })();
