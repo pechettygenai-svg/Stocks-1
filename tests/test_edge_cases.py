@@ -127,3 +127,14 @@ def test_unknown_ticker_is_unavailable_not_invented():
     s = load("brk_b_sec_facts.json")
     recs = SecEdgarAdapter(facts=s, ticker_map=s["ticker_map"]).collect("ZZZZ")
     assert len(recs) == 1 and recs[0].value is None
+
+
+def test_multi_class_issuer_without_annual_facts_is_unavailable():
+    s = load("brk_b_sec_facts.json")
+    empty = {"cik": s["cik"], "facts": {}, "ticker_map": s["ticker_map"]}
+    recs = SecEdgarAdapter(facts=empty, ticker_map=s["ticker_map"]).collect("BRK-B")
+    assert any(r.field == "sec_share_classes" for r in recs)
+    assert any(
+        r.value is None and "no us-gaap/ifrs-full annual facts" in (r.notes or r.claim)
+        for r in recs
+    )
