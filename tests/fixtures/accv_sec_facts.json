@@ -1,0 +1,28 @@
+{
+ "cik": "2141406",
+ "entityName": "Accelevation Holdings Corp.",
+ "facts": {
+  "ffd": {},
+  "us-gaap": {
+   "Assets": {
+    "label": "Assets",
+    "units": {
+     "USD": []
+    }
+   },
+   "StockholdersEquity": {
+    "label": "Stockholders' Equity Attributable to Parent",
+    "units": {
+     "USD": []
+    }
+   }
+  }
+ },
+ "ticker_map": {
+  "1895": {
+   "cik_str": 2141406,
+   "ticker": "ACCV",
+   "title": "Accelevation Holdings Corp."
+  }
+ }
+}

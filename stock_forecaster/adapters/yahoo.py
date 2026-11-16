@@ -89,6 +89,10 @@ _INFO_FIELDS: dict[str, tuple[str, str, str, str]] = {
     ),
 }
 
+# Statement amounts Yahoo reports in `financialCurrency` (differs from the quote
+# currency for ADRs, e.g. TSM: quote USD, financials TWD).
+_STATEMENT_KEYS = {"totalRevenue", "netIncomeToCommon", "freeCashflow", "totalCash", "totalDebt"}
+
 _TEXT_FIELDS: dict[str, str] = {
     "shortName": "company_name",
     "longName": "company_name",
@@ -140,6 +144,7 @@ class YahooAdapter:
 
         as_of = _as_of(info, history)
         currency = info.get("currency")
+        fin_currency = info.get("financialCurrency") or currency
         records: list[EvidenceRecord] = []
 
         for key, field in _TEXT_FIELDS.items():
@@ -164,13 +169,14 @@ class YahooAdapter:
             if isinstance(val, bool) or not isinstance(val, (int, float)):
                 continue
             is_target = field.startswith("analyst_") or field == "recommendation_mean"
+            ccy = fin_currency if key in _STATEMENT_KEYS else currency
             records.append(
                 EvidenceRecord(
                     claim=f"{label}: {val:,.4g}" if abs(val) < 1e6 else f"{label}: {val:,.0f}",
                     field=field,
                     value=float(val),
-                    unit=currency if unit == "currency" else unit,
-                    currency=currency if unit == "currency" else None,
+                    unit=ccy if unit == "currency" else unit,
+                    currency=ccy if unit == "currency" else None,
                     as_of=as_of,
                     period="TTM" if field.endswith("_ttm") else None,
                     definition=definition,

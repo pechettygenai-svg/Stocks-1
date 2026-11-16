@@ -2,11 +2,12 @@
 
 from __future__ import annotations
 
+import re
 from datetime import date, datetime, timezone
 from enum import Enum
 from typing import Any
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 DISCLAIMER = (
     "This is informational research, not investment advice or a recommendation "
@@ -16,6 +17,24 @@ DISCLAIMER = (
 
 def utc_now() -> datetime:
     return datetime.now(timezone.utc)
+
+
+# Yahoo exchange suffixes (VOD.L, SHOP.TO, 7203.T); a '.' before these is kept.
+EXCHANGE_SUFFIXES = frozenset(
+    "L T F DE PA TO V NE CN HK AX NZ SS SZ KS KQ NS BO SW MI AS BR MC ST OL CO HE IC LS IR "
+    "VI WA PR BD AT IS TA SA MX BA SN JO SI JK BK KL TW TWO SR QA KW CR".split()
+)
+
+
+def normalize_ticker(ticker: str) -> str:
+    """Canonical symbol used by Yahoo and the SEC ticker map: upper case with
+    share-class separators written as '-' (BRK.B, BRK/B, BRK B -> BRK-B), while
+    exchange suffixes stay dotted (VOD.L)."""
+    t = ticker.strip().upper()
+    base, dot, suffix = t.rpartition(".")
+    if dot and base and suffix in EXCHANGE_SUFFIXES:
+        return f"{normalize_ticker(base)}.{suffix}"
+    return re.sub(r"[./\s]+", "-", t).strip("-")
 
 
 class SourceType(str, Enum):
@@ -197,6 +216,14 @@ class AnalysisRequest(BaseModel):
     include_sources: list[str] = Field(default_factory=lambda: ["yahoo", "sec", "fidelity", "msn"])
     risk_tolerance: str | None = None
     user_forecasts: list[UserForecast] = Field(default_factory=list)
+
+    @field_validator("ticker")
+    @classmethod
+    def _canonical_ticker(cls, v: str) -> str:
+        t = normalize_ticker(v)
+        if not t:
+            raise ValueError("ticker is empty")
+        return t
 
 
 class RunStatus(str, Enum):
