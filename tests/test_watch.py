@@ -179,3 +179,11 @@ def test_outage_with_new_error_text_is_not_a_change(aapl_result):
     assert diff(snapshot(down("HTTP 503")), snapshot(down("timeout"))) == []
     [c] = diff(snapshot(aapl_result), snapshot(down("HTTP 503")))
     assert c.key == "unavailable" and "SEC EDGAR" in c.message
+
+
+def test_price_already_outside_range_does_not_realert(aapl_result):
+    lo = snapshot(aapl_result).thesis["scenario_range"][0]
+    below = _variant(aapl_result, "run-2", price_intraday=lo * 0.9)
+    again = _variant(aapl_result, "run-3", price_intraday=lo * 0.88)
+    assert any(c.key == "scenario_range" for c in diff(snapshot(aapl_result), snapshot(below)))
+    assert not any(c.key == "scenario_range" for c in diff(snapshot(below), snapshot(again)))

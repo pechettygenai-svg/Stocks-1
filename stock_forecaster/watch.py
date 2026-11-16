@@ -131,6 +131,12 @@ def _rel(a: Any, b: Any) -> float:
     return abs(b - a) / abs(a) if a else float("inf")
 
 
+def _range_side(p: Any, rng: list[float]) -> int:
+    if not isinstance(p, int | float) or rng[0] <= p <= rng[1]:
+        return 0
+    return -1 if p < rng[0] else 1
+
+
 def _set_changes(
     kind: Literal["data", "thesis"],
     key: str,
@@ -222,8 +228,14 @@ def diff(prev: Snapshot, cur: Snapshot) -> list[Change]:
                 message=f"scenario mode: {pt.get('scenario_mode')} -> {ct.get('scenario_mode')}",
             )
         )
-    rng, price = pt.get("scenario_range"), ct.get("price")
-    if rng and isinstance(price, int | float) and not rng[0] <= price <= rng[1]:
+    rng, price, prev_price = pt.get("scenario_range"), ct.get("price"), pt.get("price")
+    # Alert when the price *leaves* the range (or crosses to the other side), not on
+    # every rerun while a baseline that was already outside its range stays there.
+    if (
+        rng
+        and isinstance(price, int | float)
+        and _range_side(price, rng) not in (0, _range_side(prev_price, rng))
+    ):
         side = "below the prior Bear low" if price < rng[0] else "above the prior Bull high"
         changes.append(
             Change(
