@@ -95,9 +95,11 @@ def snapshot(result: AnalysisResult) -> Snapshot:
             "high": f.value_high,
             "analyst_count": f.analyst_count,
         }
+    # Keyed by source + field, not the claim text: a continuing outage whose error
+    # message changes is not an availability change.
     data["unavailable"] = sorted(
         {
-            e.claim
+            f"{e.source_name} ({e.field or e.source_type.value})"
             for e in result.evidence
             if e.retrieval_status == RetrievalStatus.UNAVAILABLE and e.field != "cross_check_link"
         }

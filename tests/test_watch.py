@@ -3,6 +3,7 @@ from datetime import date
 from fastapi.testclient import TestClient
 from typer.testing import CliRunner
 
+from stock_forecaster.adapters import unavailable
 from stock_forecaster.models import AnalysisResult, RunStatus
 from stock_forecaster.store import RunStore
 from stock_forecaster.watch import check_item, diff, snapshot
@@ -167,3 +168,14 @@ def test_exact_threshold_moves_alert(aapl_result):
 
     keys = {c.key for c in diff(snap(2.3, 7.0), snap(2.1, 7.14))}
     assert keys == {"consensus:recommendation_mean", "consensus:eps_forward"}
+
+
+def test_outage_with_new_error_text_is_not_a_change(aapl_result):
+    def down(reason):
+        r = aapl_result.model_copy(deep=True)
+        r.evidence.append(unavailable("SEC EDGAR", "filing", None, reason))
+        return r
+
+    assert diff(snapshot(down("HTTP 503")), snapshot(down("timeout"))) == []
+    [c] = diff(snapshot(aapl_result), snapshot(down("HTTP 503")))
+    assert c.key == "unavailable" and "SEC EDGAR" in c.message
