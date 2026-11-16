@@ -151,3 +151,19 @@ def test_cli_watch_check_exit_codes(aapl_result, isolated_db, monkeypatch):
     assert first.exit_code == 0 and "baseline" in first.output
     second = runner.invoke(cli.app, ["watch-check", "--db", str(isolated_db)])
     assert second.exit_code == 3 and "[data] eps_forward" in second.output
+
+
+def test_exact_threshold_moves_alert(aapl_result):
+    from stock_forecaster.watch import Snapshot
+
+    def snap(reco, eps):
+        return Snapshot(
+            run_id="r",
+            data={
+                "consensus:recommendation_mean": {"value": reco},
+                "consensus:eps_forward": {"value": eps},
+            },
+        )
+
+    keys = {c.key for c in diff(snap(2.3, 7.0), snap(2.1, 7.14))}
+    assert keys == {"consensus:recommendation_mean", "consensus:eps_forward"}

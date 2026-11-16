@@ -33,6 +33,11 @@ CONSENSUS_REL = 0.02
 RECOMMENDATION_ABS = 0.2
 ANALYST_COUNT_ABS = 3
 CONSENSUS_FIELDS = ("eps_forward", "recommendation_mean")
+_EPS = 1e-9  # so a move of exactly the threshold counts despite float rounding
+
+
+def _reaches(x: float, limit: float) -> bool:
+    return x >= limit - _EPS
 
 
 class Snapshot(BaseModel):
@@ -165,9 +170,9 @@ def diff(prev: Snapshot, cur: Snapshot) -> list[Change]:
             bv, av = (b or {}).get("value"), (a or {}).get("value")
             limit = RECOMMENDATION_ABS if name == "recommendation_mean" else None
             shifted = (
-                abs(av - bv) >= limit
+                _reaches(abs(av - bv), limit)
                 if limit and isinstance(av, int | float) and isinstance(bv, int | float)
-                else _rel(bv, av) >= CONSENSUS_REL
+                else _reaches(_rel(bv, av), CONSENSUS_REL)
             )
             if shifted:
                 changes.append(
@@ -183,13 +188,13 @@ def diff(prev: Snapshot, cur: Snapshot) -> list[Change]:
                 moved = [
                     f"{k} {b.get(k)} -> {a.get(k)}"
                     for k in ("low", "mean", "high")
-                    if _rel(b.get(k), a.get(k)) >= CONSENSUS_REL
+                    if _reaches(_rel(b.get(k), a.get(k)), CONSENSUS_REL)
                 ]
                 bc, ac = b.get("analyst_count"), a.get("analyst_count")
                 if (
                     isinstance(bc, int)
                     and isinstance(ac, int)
-                    and abs(ac - bc) >= ANALYST_COUNT_ABS
+                    and _reaches(abs(ac - bc), ANALYST_COUNT_ABS)
                 ):
                     moved.append(f"analysts {bc} -> {ac}")
                 if not moved:
