@@ -264,7 +264,12 @@ class SecEdgarAdapter:
                         notes=f"accession {pt['accn']}",
                     )
                 )
-        if not any(r.source_type == SourceType.FILING and r.value is not None for r in records):
+        if not any(
+            r.source_type == SourceType.FILING
+            and r.value is not None
+            and r.field != "sec_share_classes"
+            for r in records
+        ):
             records.append(
                 unavailable("SEC EDGAR", "filing", url, "no us-gaap/ifrs-full annual facts")
             )
