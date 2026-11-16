@@ -67,12 +67,23 @@ mypy stock_forecaster
 pytest
 ```
 
-Tests run entirely from fixtures in `tests/fixtures/` (sanitized AAPL Yahoo + SEC snapshots); nothing
-in the suite touches the network.
+Tests run entirely from fixtures in `tests/fixtures/`; nothing in the suite touches the network.
+Besides AAPL, `tests/test_edge_cases.py` replays trimmed snapshots of tricky listings:
+
+| Fixture | Case | What it checks |
+|---|---|---|
+| RIVN | unprofitable growth | sales-mode scenarios, DCF skipped on negative FCF, red flags |
+| JPM | bank | NII / provision / loans-to-deposits ratios, discontinued SEC tags dropped |
+| TSM | ADR, IFRS filer | `ifrs-full` facts read in TWD; no TWD statement x USD quote math |
+| ACCV | recent IPO | 29 sessions of history, no annual filings yet, assumed growth flagged |
+| BRK.B | ambiguous ticker | `BRK.B` -> `BRK-B`, multi-class warning, class-equivalent share count |
+
+Refresh them with `SEC_USER_AGENT="name email" python scripts/capture_fixtures.py RIVN JPM TSM BRK-B ACCV`.
 
 ## Roadmap
 
 - Done: single-ticker core, forecast comparison with duplicate/stale/outlier flags, critic/auditor
-  revision loop, web UI with run history and scenario sliders.
-- Next: persistent run storage, more permitted forecast sources, fixture evaluation set (unprofitable
-  growth, bank, ADR, recent IPO, ambiguous ticker), watchlists (alerts only for data/thesis changes).
+  revision loop, web UI with run history and scenario sliders, fixture evaluation set (unprofitable
+  growth, bank, ADR, recent IPO, ambiguous ticker).
+- Next: persistent run storage, more permitted forecast sources, watchlists (alerts only for
+  data/thesis changes).

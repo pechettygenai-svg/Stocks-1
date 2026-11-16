@@ -55,9 +55,12 @@ def build_drivers(inp: ScenarioInputs) -> tuple[list[ScenarioDrivers], str, list
         m0 = inp.net_margin if inp.net_margin is not None else 0.0
         mult = inp.ps_current if inp.ps_current and inp.ps_current > 0 else 3.0
         mult = _clip(mult, 0.5, 20.0)
-        warnings.append(
-            "company not profitable on latest data; scenarios use price/sales exit multiple"
+        reason = (
+            "net margin or EPS unavailable"
+            if inp.net_margin is None or inp.eps is None
+            else "company not profitable on latest data"
         )
+        warnings.append(f"{reason}; scenarios use price/sales exit multiple")
 
     drivers = [
         ScenarioDrivers(

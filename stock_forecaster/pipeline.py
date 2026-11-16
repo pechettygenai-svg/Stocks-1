@@ -17,6 +17,7 @@ from .adapters import (
 from .analytics import (
     ScenarioInputs,
     build_scenarios,
+    currency_mismatch,
     fundamental_summary,
     technical_summary,
     valuation_summary,
@@ -24,7 +25,7 @@ from .analytics import (
 from .ledger import EvidenceLedger
 from .llm import LLMProvider, get_provider, run_role
 from .llm.roles import ROLE_TASKS
-from .models import AnalysisRequest, AnalysisResult, RunStatus, utc_now
+from .models import AnalysisRequest, AnalysisResult, RunStatus, normalize_ticker, utc_now
 from .quality import run_quality_gates
 from .report import render_report
 from .review import apply_review, deterministic_review, model_review
@@ -61,7 +62,7 @@ def run_analysis(
         started_at=utc_now(),
     )
     ledger = EvidenceLedger()
-    ticker = request.ticker.upper().strip()
+    ticker = normalize_ticker(request.ticker)
 
     def status(s: RunStatus) -> None:
         result.status = s
@@ -100,23 +101,42 @@ def run_analysis(
         calcs["fundamentals"] = fund
         price = ledger.value("price_intraday")
         shares = ledger.value("diluted_shares_fy") or ledger.value("shares_outstanding")
+        # ADRs / foreign filers: statements in one currency, quote in another. Without
+        # an FX rate and ADR ratio, statement amounts cannot be put on a per-share basis.
+        mismatch = currency_mismatch(ledger)
+        mcap = ledger.value("market_cap")
+        share_basis_note = None
+        if ledger.by_field("sec_share_classes") and price and mcap:
+            # Multi-class issuer: one class's share count understates the whole
+            # company; use class-equivalent shares implied by market cap instead.
+            shares = mcap / price
+            share_basis_note = (
+                f"multiple share classes: per-share values use market cap / price = "
+                f"{shares:,.0f} class-equivalent shares"
+            )
         fcf = fund.outputs.get("free_cash_flow")
         net_debt = fund.outputs.get("net_debt")
         calcs["valuation"] = valuation_summary(
             price,
-            fcf if isinstance(fcf, float) else None,
+            fcf if isinstance(fcf, float) and not mismatch else None,
             net_debt if isinstance(net_debt, float) else (0.0 if fcf is not None else None),
             shares,
             ledger.value("eps_forward"),
             fund.evidence_ids,
         )
-        if net_debt is None and fcf is not None:
+        if mismatch:
+            calcs["valuation"].warnings.append(
+                f"DCF skipped: statements in {mismatch[1]}, quote in {mismatch[0]} "
+                "(no FX rate / ADR ratio in ledger)"
+            )
+        elif net_debt is None and fcf is not None:
             calcs["valuation"].warnings.append("net debt unavailable; DCF assumes zero net debt")
 
         if price is not None:
             # Scenario base prefers the most recent period (TTM) over the last FY.
-            revenue = ledger.value("revenue_ttm") or ledger.value("revenue_fy")
-            mcap = ledger.value("market_cap")
+            revenue = (
+                None if mismatch else ledger.value("revenue_ttm") or ledger.value("revenue_fy")
+            )
             nm = fund.outputs.get("net_margin")
             pe = ledger.value("pe_forward") or ledger.value("pe_ttm")
             inp = ScenarioInputs(
@@ -133,6 +153,13 @@ def run_analysis(
                 horizon_years=request.horizon.years,
             )
             result.scenarios, calcs["scenarios"] = build_scenarios(inp)
+            if share_basis_note:
+                calcs["scenarios"].warnings.append(share_basis_note)
+            if mismatch:
+                calcs["scenarios"].warnings.append(
+                    f"statement revenue ({mismatch[1]}) not used for per-share scenarios; "
+                    f"quote is in {mismatch[0]}"
+                )
         result.calculations = list(calcs.values())
 
         # 4. specialist roles + review ----------------------------------------

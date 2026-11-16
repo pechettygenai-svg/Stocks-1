@@ -15,6 +15,22 @@ def _ratio(num: float | None, den: float | None) -> float | None:
     return num / den
 
 
+STATEMENT_FIELDS = ("revenue_fy", "revenue_ttm", "net_income_fy", "net_income_ttm", "cash")
+BANK_FIELDS = ("net_interest_income_fy", "provision_credit_losses_fy", "loans_net", "deposits")
+
+
+def currency_mismatch(ledger: EvidenceLedger) -> tuple[str, str] | None:
+    """(quote currency, statement currency) when they differ, e.g. an ADR quoted in
+    USD whose filings and provider financials are in TWD."""
+    price = ledger.best("price_intraday")
+    q = price.currency if price else None
+    for fld in STATEMENT_FIELDS:
+        rec = ledger.best(fld)
+        if q and rec and rec.currency and rec.currency != q:
+            return q, rec.currency
+    return None
+
+
 def fundamental_summary(ledger: EvidenceLedger) -> CalculationResult:
     L = ledger
     used = [
@@ -45,7 +61,12 @@ def fundamental_summary(ledger: EvidenceLedger) -> CalculationResult:
     ]
     v = {f: L.value(f) for f in used}
     ev_ids = [r.id for f in used if (r := L.best(f)) is not None]
-    warnings: list[str] = [f"missing input: {f}" for f in used if v[f] is None]
+    sector = str(getattr(L.best("sector"), "value", "") or "")
+    is_bank = any(v[f] is not None for f in BANK_FIELDS) or "financial" in sector.lower()
+    warnings: list[str] = [
+        f"missing input: {f}" for f in used if v[f] is None and (is_bank or f not in BANK_FIELDS)
+    ]
+    mismatch = currency_mismatch(L)
 
     rev, rev_p = v["revenue_fy"], v["revenue_fy_prior"]
     ni, ni_p = v["net_income_fy"], v["net_income_fy_prior"]
@@ -77,12 +98,12 @@ def fundamental_summary(ledger: EvidenceLedger) -> CalculationResult:
         "share_count_change_yoy": _ratio(shares - shares_p, shares_p)
         if shares is not None and shares_p
         else None,
-        "fcf_yield": _ratio(fcf, mcap),
+        "fcf_yield": None if mismatch else _ratio(fcf, mcap),
         "earnings_yield_ttm": _ratio(v["eps_ttm"], price),
         "pe_ttm_recomputed": _ratio(price, v["eps_ttm"]),
         "pe_forward_recomputed": _ratio(price, v["eps_forward"]),
-        "price_to_book_recomputed": _ratio(mcap, v["total_equity"]),
-        "market_cap_to_revenue_fy": _ratio(mcap, rev),
+        "price_to_book_recomputed": None if mismatch else _ratio(mcap, v["total_equity"]),
+        "market_cap_to_revenue_fy": None if mismatch else _ratio(mcap, rev),
         # bank-specific (None for non-banks)
         "nii_to_revenue": _ratio(v["net_interest_income_fy"], rev),
         "provision_to_loans": _ratio(v["provision_credit_losses_fy"], v["loans_net"]),
@@ -90,6 +111,11 @@ def fundamental_summary(ledger: EvidenceLedger) -> CalculationResult:
         "equity_to_assets": _ratio(v["total_equity"], v["total_assets"]),
     }
 
+    if mismatch:
+        warnings.append(
+            f"statements in {mismatch[1]} but quote in {mismatch[0]}: market-value ratios "
+            "(FCF yield, P/B, market cap/revenue) not computed"
+        )
     red_flags: list[str] = []
     if ni is not None and ni < 0:
         red_flags.append("negative net income (latest FY)")

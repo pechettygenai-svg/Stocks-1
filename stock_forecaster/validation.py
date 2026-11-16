@@ -41,7 +41,14 @@ def validate(ledger: EvidenceLedger, today: date | None = None) -> list[str]:
         ("revenue_fy", "revenue_ttm", "revenue"),
         ("net_income_fy", "net_income_ttm", "net income"),
     ):
+        ra, rb = ledger.best(fil), ledger.best(md)
         a, b = ledger.value(fil), ledger.value(md)
+        if ra and rb and ra.currency and rb.currency and ra.currency != rb.currency:
+            warnings.append(
+                f"{label}: filing in {ra.currency} vs provider in {rb.currency}; "
+                "not compared (no FX rate in ledger)"
+            )
+            continue
         if a is not None and b is not None and a != 0:
             diff = abs(a - b) / abs(a)
             if diff > 0.15:
@@ -76,6 +83,12 @@ def validate(ledger: EvidenceLedger, today: date | None = None) -> list[str]:
     for fld in {r.field for r in ledger.all() if r.field}:
         for id_a, id_b, diff in ledger.conflicts(fld):
             warnings.append(f"conflict on {fld}: {id_a} vs {id_b} differ by {diff:.0%}")
+
+    for r in ledger.by_field("sec_share_classes"):
+        warnings.append(
+            f"ambiguous listing: {r.claim}; confirm the intended class "
+            "(per-share filing values and market cap may cover all classes)"
+        )
 
     ni = ledger.value("net_income_fy")
     if ni is not None and ni < 0:

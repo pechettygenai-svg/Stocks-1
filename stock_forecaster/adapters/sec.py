@@ -11,7 +11,7 @@ from typing import Any
 
 import httpx
 
-from ..models import EvidenceRecord, SourceType
+from ..models import EvidenceRecord, SourceType, normalize_ticker
 from .base import AdapterError, unavailable
 
 TICKERS_URL = "https://www.sec.gov/files/company_tickers.json"
@@ -87,6 +87,40 @@ CONCEPTS: dict[str, tuple[list[str], str, str]] = {
 }
 
 
+# Foreign private issuers (20-F/40-F) tag in ifrs-full. Share counts are omitted:
+# ordinary shares do not map 1:1 to the US-listed ADRs.
+IFRS_CONCEPTS: dict[str, tuple[list[str], str, str]] = {
+    "revenue_fy": (["Revenue"], "duration", "Total revenue, fiscal year"),
+    "operating_income_fy": (
+        ["ProfitLossFromOperatingActivities"],
+        "duration",
+        "Operating income, fiscal year",
+    ),
+    "net_income_fy": (
+        ["ProfitLossAttributableToOwnersOfParent", "ProfitLoss"],
+        "duration",
+        "Net income, fiscal year",
+    ),
+    "operating_cash_flow_fy": (
+        ["CashFlowsFromUsedInOperatingActivities"],
+        "duration",
+        "Cash from operations, fiscal year",
+    ),
+    "capex_fy": (
+        ["PurchaseOfPropertyPlantAndEquipmentClassifiedAsInvestingActivities"],
+        "duration",
+        "Capital expenditures, FY",
+    ),
+    "cash": (["CashAndCashEquivalents"], "instant", "Cash and equivalents, FY end"),
+    "total_equity": (
+        ["EquityAttributableToOwnersOfParent", "Equity"],
+        "instant",
+        "Shareholders' equity, FY end",
+    ),
+    "total_assets": (["Assets"], "instant", "Total assets, FY end"),
+}
+
+
 def _user_agent() -> str:
     return os.environ.get("SEC_USER_AGENT", "stock-forecaster research bot admin@example.com")
 
@@ -99,25 +133,49 @@ class SecEdgarAdapter:
         facts: dict[str, Any] | None = None,
         cik: int | None = None,
         timeout: float = 20.0,
+        ticker_map: dict[str, Any] | None = None,
     ):
         self._facts = facts
         self._cik = cik
         self._timeout = timeout
+        self._ticker_map = ticker_map
+        self.share_classes: list[str] = []
+
+    def _load_ticker_map(self) -> list[dict[str, Any]]:
+        if self._ticker_map is None:
+            try:
+                resp = httpx.get(
+                    TICKERS_URL, headers={"User-Agent": _user_agent()}, timeout=self._timeout
+                )
+                resp.raise_for_status()
+            except httpx.HTTPError as exc:  # pragma: no cover - network path
+                raise AdapterError(f"ticker map fetch failed: {exc}") from exc
+            self._ticker_map = dict(resp.json())
+        return list(self._ticker_map.values())
 
     def resolve_cik(self, ticker: str) -> int:
-        if self._cik is not None:
+        if self._cik is not None and self._ticker_map is None:
             return self._cik
-        try:
-            resp = httpx.get(
-                TICKERS_URL, headers={"User-Agent": _user_agent()}, timeout=self._timeout
+        rows = self._load_ticker_map()
+        want = normalize_ticker(ticker)
+        cik = self._cik
+        if cik is None:
+            cik = next(
+                (int(r["cik_str"]) for r in rows if normalize_ticker(str(r["ticker"])) == want),
+                None,
             )
-            resp.raise_for_status()
-        except httpx.HTTPError as exc:  # pragma: no cover - network path
-            raise AdapterError(f"ticker map fetch failed: {exc}") from exc
-        for row in resp.json().values():
-            if str(row.get("ticker", "")).upper() == ticker.upper().replace("-", ""):
-                return int(row["cik_str"])
-        raise AdapterError(f"{ticker} not found in SEC ticker map (foreign listing or non-filer?)")
+        if cik is None:
+            raise AdapterError(
+                f"{ticker} not found in SEC ticker map (foreign listing or non-filer?)"
+            )
+        # One registrant, several listed common classes (BRK-A/BRK-B, GOOG/GOOGL).
+        # Preferreds (JPM-PC) and unrelated issuer notes (AMJB) are not share classes.
+        self.share_classes = sorted(
+            t
+            for t in {normalize_ticker(str(r["ticker"])) for r in rows if int(r["cik_str"]) == cik}
+            if "-P" not in t and t[:3] == want[:3]
+        )
+        return cik
 
     def fetch_facts(self, cik: int) -> dict[str, Any]:
         if self._facts is not None:
@@ -140,11 +198,32 @@ class SecEdgarAdapter:
         except AdapterError as exc:
             return [unavailable("SEC EDGAR", "filing", TICKERS_URL, str(exc))]
 
+        taxonomy, concept_map = "us-gaap", CONCEPTS
         gaap = facts.get("facts", {}).get("us-gaap", {})
+        if not _annual_series(gaap, CONCEPTS["revenue_fy"][0], "duration") and facts.get(
+            "facts", {}
+        ).get("ifrs-full"):
+            taxonomy, concept_map = "ifrs-full", IFRS_CONCEPTS
+            gaap = facts["facts"]["ifrs-full"]
         url = FILING_INDEX_URL.format(cik=cik)
         records: list[EvidenceRecord] = []
-        latest_end = _latest_period_end(gaap)
-        for field, (concepts, kind, definition) in CONCEPTS.items():
+        if len(self.share_classes) > 1:
+            records.append(
+                EvidenceRecord(
+                    claim=f"SEC CIK {cik} lists several share classes: "
+                    + ", ".join(self.share_classes),
+                    field="sec_share_classes",
+                    value=", ".join(self.share_classes),
+                    source_name="SEC EDGAR (company_tickers.json)",
+                    source_url=TICKERS_URL,
+                    source_type=SourceType.FILING,
+                    confidence=0.95,
+                    notes=f"requested {normalize_ticker(ticker)}; filing per-share figures "
+                    "may be stated for a different class",
+                )
+            )
+        latest_end = _latest_period_end(gaap, concept_map)
+        for field, (concepts, kind, definition) in concept_map.items():
             series = _annual_series(gaap, concepts, kind)
             if not series:
                 continue
@@ -156,7 +235,7 @@ class SecEdgarAdapter:
                         "SEC EDGAR",
                         "filing",
                         url,
-                        f"{field}: latest us-gaap tag ({series[0]['concept']}) ends "
+                        f"{field}: latest {taxonomy} tag ({series[0]['concept']}) ends "
                         f"{series[0]['end']}, older than latest filing period {latest_end}",
                         field=field,
                     )
@@ -173,11 +252,11 @@ class SecEdgarAdapter:
                         field=field + suffix,
                         value=pt["val"],
                         unit=pt["unit"],
-                        currency=pt["unit"] if pt["unit"] in ("USD", "EUR", "GBP") else None,
+                        currency=pt["unit"] if _is_currency(pt["unit"]) else None,
                         as_of=pt["end"],
                         published_at=pt["filed"],
                         period=f"FY{pt['fy']}",
-                        definition=f"us-gaap:{pt['concept']}",
+                        definition=f"{taxonomy}:{pt['concept']}",
                         source_name=f"SEC EDGAR {pt['form']} (XBRL companyfacts)",
                         source_url=url,
                         source_type=SourceType.FILING,
@@ -185,16 +264,24 @@ class SecEdgarAdapter:
                         notes=f"accession {pt['accn']}",
                     )
                 )
-        if not records:
-            records.append(unavailable("SEC EDGAR", "filing", url, "no us-gaap annual facts"))
+        if not any(r.source_type == SourceType.FILING and r.value is not None for r in records):
+            records.append(
+                unavailable("SEC EDGAR", "filing", url, "no us-gaap/ifrs-full annual facts")
+            )
         return records
 
 
-def _latest_period_end(gaap: dict[str, Any]) -> date | None:
+def _is_currency(unit: str) -> bool:
+    return len(unit) == 3 and unit.isalpha() and unit.isupper()
+
+
+def _latest_period_end(
+    gaap: dict[str, Any], concept_map: dict[str, tuple[list[str], str, str]] = CONCEPTS
+) -> date | None:
     """Most recent annual period end across the core income-statement concepts."""
     ends = [
         pt["end"]
-        for concepts, kind, _ in (CONCEPTS["revenue_fy"], CONCEPTS["net_income_fy"])
+        for concepts, kind, _ in (concept_map["revenue_fy"], concept_map["net_income_fy"])
         for pt in _annual_series(gaap, concepts, kind)[:1]
     ]
     return max(ends) if ends else None
@@ -209,6 +296,8 @@ def _annual_series(gaap: dict[str, Any], concepts: list[str], kind: str) -> list
         node = gaap.get(concept)
         if not node:
             continue
+        concept_best: list[dict[str, Any]] = []
+        best_n = 0
         for unit, points in node.get("units", {}).items():
             rows: dict[str, dict[str, Any]] = {}
             for p in points:
@@ -238,6 +327,13 @@ def _annual_series(gaap: dict[str, Any], concepts: list[str], kind: str) -> list
                         "concept": concept,
                     }
             series = [rows[k] for k in sorted(rows, reverse=True)]
-            if series and (not best or series[0]["end"] > best[0]["end"]):
-                best = series
+            # Same concept in two currencies (20-F convenience translation): the
+            # reporting currency is the unit with the longer history.
+            if series and (
+                not concept_best
+                or (series[0]["end"], len(points)) > (concept_best[0]["end"], best_n)
+            ):
+                concept_best, best_n = series, len(points)
+        if concept_best and (not best or concept_best[0]["end"] > best[0]["end"]):
+            best = concept_best
     return best

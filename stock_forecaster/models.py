@@ -2,11 +2,12 @@
 
 from __future__ import annotations
 
+import re
 from datetime import date, datetime, timezone
 from enum import Enum
 from typing import Any
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 DISCLAIMER = (
     "This is informational research, not investment advice or a recommendation "
@@ -16,6 +17,13 @@ DISCLAIMER = (
 
 def utc_now() -> datetime:
     return datetime.now(timezone.utc)
+
+
+def normalize_ticker(ticker: str) -> str:
+    """Canonical symbol used by Yahoo and the SEC ticker map: upper case with
+    share-class separators written as '-' (BRK.B, BRK/B, BRK B -> BRK-B)."""
+    t = ticker.strip().upper()
+    return re.sub(r"[./\s]+", "-", t).strip("-")
 
 
 class SourceType(str, Enum):
@@ -197,6 +205,14 @@ class AnalysisRequest(BaseModel):
     include_sources: list[str] = Field(default_factory=lambda: ["yahoo", "sec", "fidelity", "msn"])
     risk_tolerance: str | None = None
     user_forecasts: list[UserForecast] = Field(default_factory=list)
+
+    @field_validator("ticker")
+    @classmethod
+    def _canonical_ticker(cls, v: str) -> str:
+        t = normalize_ticker(v)
+        if not t:
+            raise ValueError("ticker is empty")
+        return t
 
 
 class RunStatus(str, Enum):
