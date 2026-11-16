@@ -88,7 +88,9 @@ def snapshot(result: AnalysisResult) -> Snapshot:
         elif e.field in CONSENSUS_FIELDS and e.value is not None:
             data[f"consensus:{e.field}"] = {"value": e.value}
     for f in result.forecasts:
-        data[f"forecast:{f.source}"] = {
+        # A source can contribute both a price-target row and a rating-mix row.
+        suffix = " (rating mix)" if f.ratings is not None else ""
+        data[f"forecast:{f.source}{suffix}"] = {
             "status": f.status.value,
             "low": f.value_low,
             "mean": f.value_mean,

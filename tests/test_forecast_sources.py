@@ -137,3 +137,14 @@ def test_rating_mix_shift_is_a_watchlist_data_change(aapl_yahoo, aapl_sec):
     after = _run(aapl_yahoo, aapl_sec, FinnhubAdapter(payloads=shifted))
     msgs = [c.message for c in diff(snapshot(before), snapshot(after))]
     assert any("Finnhub" in m and "rating mean" in m for m in msgs)
+
+
+def test_target_only_change_alerts_alongside_rating_mix(aapl_yahoo, aapl_sec):
+    before = _run(aapl_yahoo, aapl_sec, FinnhubAdapter(payloads=PAYLOADS["finnhub"]))
+    moved = {
+        **PAYLOADS["finnhub"],
+        "price_target": {**PAYLOADS["finnhub"]["price_target"], "targetMean": 340.0},
+    }
+    after = _run(aapl_yahoo, aapl_sec, FinnhubAdapter(payloads=moved))
+    msgs = [c.message for c in diff(snapshot(before), snapshot(after))]
+    assert any("Finnhub" in m and "mean 312.5 -> 340.0" in m for m in msgs)
