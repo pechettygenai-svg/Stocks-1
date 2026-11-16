@@ -1,0 +1,17 @@
+{
+  "_note": "Schema samples shaped like each provider's documented response. Values are synthetic test data, not captured quotes; only the field names and nesting are real.",
+  "finnhub": {
+    "recommendation": [
+      {"buy": 22, "hold": 12, "period": "2026-10-01", "sell": 2, "strongBuy": 8, "strongSell": 0, "symbol": "AAPL"},
+      {"buy": 24, "hold": 11, "period": "2026-11-01", "sell": 1, "strongBuy": 9, "strongSell": 0, "symbol": "AAPL"}
+    ],
+    "price_target": {"lastUpdated": "2026-11-10 00:00:00", "symbol": "AAPL", "targetHigh": 400.0, "targetLow": 220.0, "targetMean": 312.5, "targetMedian": 315.0}
+  },
+  "fmp": {
+    "price_target": [{"symbol": "AAPL", "targetHigh": 410.0, "targetLow": 210.0, "targetConsensus": 305.4, "targetMedian": 300.0}],
+    "grades": [{"symbol": "AAPL", "strongBuy": 1, "buy": 30, "hold": 14, "sell": 2, "strongSell": 0, "consensus": "Buy"}]
+  },
+  "alphavantage": {
+    "overview": {"Symbol": "AAPL", "AnalystTargetPrice": "328.22", "AnalystRatingStrongBuy": "7", "AnalystRatingBuy": "21", "AnalystRatingHold": "10", "AnalystRatingSell": "1", "AnalystRatingStrongSell": "0"}
+  }
+}

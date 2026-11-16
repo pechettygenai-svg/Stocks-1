@@ -158,6 +158,8 @@ def forecast_panel(
             )
         )
 
+    panel += _keyed_rows(ledger, horizon)
+
     linked = {p.source.split(" (")[0].lower() for p in panel}
     for r in ledger.by_field("cross_check_link"):
         if r.source_name.split(" (")[0].lower() in linked:
@@ -176,6 +178,83 @@ def forecast_panel(
 
     _flag_duplicates_stale_outliers(panel, ledger.value("price_intraday"), today)
     return panel
+
+
+RATING_KINDS = ("strong_buy", "buy", "hold", "sell", "strong_sell")
+
+
+def _keyed_rows(ledger: EvidenceLedger, horizon: str) -> list[ForecastComparison]:
+    """Rows for the keyed API feeds (`adapters.forecast_apis`): one price-target row
+    and one rating-mix row per provider, or one unavailable row if neither came back."""
+    by_slug: dict[str, dict[str, list[EvidenceRecord]]] = {}
+    for r in ledger.all():
+        f = r.field or ""
+        for prefix in ("ext_target_", "ext_ratings_", "ext_status_"):
+            if f.startswith(prefix):
+                slug = f[len(prefix) :].split("_", 1)[0]
+                by_slug.setdefault(slug, {}).setdefault(prefix, []).append(r)
+    rows: list[ForecastComparison] = []
+    for groups in by_slug.values():
+        status = groups.get("ext_status_", [])
+        partial = [f"partial: {r.notes}" for r in status]
+        targets = {(r.field or "").rsplit("_", 1)[1]: r for r in groups.get("ext_target_", [])}
+        if targets:
+            any_r = next(iter(targets.values()))
+            mean = targets.get("mean") or targets.get("median")
+            rows.append(
+                ForecastComparison(
+                    source=any_r.source_name,
+                    forecast_type="analyst price target (consensus)",
+                    horizon="12m",
+                    value_low=_num(targets.get("low")),
+                    value_mean=_num(mean),
+                    value_high=_num(targets.get("high")),
+                    as_of=any_r.as_of,
+                    weight="context",
+                    url=any_r.source_url,
+                    evidence_ids=[r.id for r in targets.values()],
+                    notes=(["mean not provided; median shown"] if "mean" not in targets else [])
+                    + partial,
+                )
+            )
+        counts_r = {(r.field or "").split("_", 3)[3]: r for r in groups.get("ext_ratings_", [])}
+        counts = {k: int(_num(counts_r.get(k)) or 0) for k in RATING_KINDS}
+        n = sum(counts.values())
+        if n:
+            any_r = next(iter(counts_r.values()))
+            score = sum((i + 1) * counts[k] for i, k in enumerate(RATING_KINDS)) / n
+            rows.append(
+                ForecastComparison(
+                    source=any_r.source_name,
+                    forecast_type="analyst rating mix",
+                    horizon="current",
+                    as_of=any_r.as_of,
+                    analyst_count=n,
+                    ratings=counts,
+                    rating_mean=round(score, 2),
+                    weight="context",
+                    url=any_r.source_url,
+                    evidence_ids=[r.id for r in counts_r.values()],
+                    notes=[
+                        "rating mean computed here from the counts (1=strong-buy..5=strong-sell)"
+                    ]
+                    + ([] if targets else partial),
+                )
+            )
+        if not targets and not n and status:
+            rows.append(
+                ForecastComparison(
+                    source=status[0].source_name,
+                    forecast_type="unavailable",
+                    horizon=horizon,
+                    status=RetrievalStatus.UNAVAILABLE,
+                    weight="none",
+                    url=status[0].source_url,
+                    evidence_ids=[r.id for r in status],
+                    notes=[r.notes or "" for r in status],
+                )
+            )
+    return rows
 
 
 def _num(r: EvidenceRecord | None) -> float | None:
@@ -197,7 +276,10 @@ def _flag_duplicates_stale_outliers(
                 q.value_mean or 1
             )
             same_range = (p.value_low, p.value_high) == (q.value_low, q.value_high)
-            if same_val and (same_range or p.analyst_count == q.analyst_count):
+            # A mean-only row (no range, no count) matching another mean is treated as
+            # a republished consensus; there is nothing else to tell them apart.
+            mean_only = p.value_low is None and p.value_high is None and not p.analyst_count
+            if same_val and (same_range or p.analyst_count == q.analyst_count or mean_only):
                 p.duplicate_of = q.source
                 p.weight = "duplicate"
                 p.notes.append(

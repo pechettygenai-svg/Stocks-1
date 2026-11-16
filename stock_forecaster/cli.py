@@ -6,7 +6,7 @@ from pathlib import Path
 
 import typer
 
-from .models import AnalysisRequest, Horizon
+from .models import DEFAULT_SOURCES, AnalysisRequest, Horizon
 from .pipeline import run_analysis
 
 app = typer.Typer(help="Evidence-first stock research. Informational only; not investment advice.")
@@ -16,7 +16,7 @@ app = typer.Typer(help="Evidence-first stock research. Informational only; not i
 def analyze(
     ticker: str = typer.Argument(..., help="Ticker symbol, e.g. AAPL"),
     horizon: Horizon = typer.Option(Horizon.M12, help="12m, 3y or 5y"),
-    sources: str = typer.Option("yahoo,sec,fidelity,msn", help="Comma-separated source keys"),
+    sources: str = typer.Option(",".join(DEFAULT_SOURCES), help="Comma-separated source keys"),
     out: Path | None = typer.Option(None, help="Write Markdown report here"),
     json_out: Path | None = typer.Option(None, help="Write full JSON result here"),
     risk_tolerance: str | None = typer.Option(

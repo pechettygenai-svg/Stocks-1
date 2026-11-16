@@ -37,6 +37,9 @@ def normalize_ticker(ticker: str) -> str:
     return re.sub(r"[./\s]+", "-", t).strip("-")
 
 
+DEFAULT_SOURCES = ("yahoo", "sec", "finnhub", "fmp", "alphavantage", "fidelity", "msn")
+
+
 class SourceType(str, Enum):
     FILING = "filing"
     COMPANY = "company"
@@ -156,6 +159,10 @@ class ForecastComparison(BaseModel):
     value_high: float | None = None
     as_of: date | None = None
     analyst_count: int | None = None
+    # Rating-mix rows: counts per strong_buy..strong_sell and their mean on the
+    # 1=strong-buy..5=strong-sell scale (same scale as Yahoo's recommendationMean).
+    ratings: dict[str, int] | None = None
+    rating_mean: float | None = None
     method_disclosed: bool = False
     weight: str = "context"
     status: RetrievalStatus = RetrievalStatus.VERIFIED
@@ -213,7 +220,7 @@ class AnalysisRequest(BaseModel):
     exchange: str | None = None
     horizon: Horizon = Horizon.M12
     depth: str = "standard"
-    include_sources: list[str] = Field(default_factory=lambda: ["yahoo", "sec", "fidelity", "msn"])
+    include_sources: list[str] = Field(default_factory=lambda: list(DEFAULT_SOURCES))
     risk_tolerance: str | None = None
     user_forecasts: list[UserForecast] = Field(default_factory=list)
 

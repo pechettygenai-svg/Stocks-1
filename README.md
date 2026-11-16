@@ -45,6 +45,23 @@ API: `POST /v1/analyses`, `GET /v1/analyses[?ticker=]` (history), `GET /v1/analy
 `~/.stock_forecaster/runs.db`, or `serve --db PATH`) and survives restarts; runs that were mid-pipeline
 when the server stopped are marked failed (`interrupted`) on the next start.
 
+### External forecast sources
+
+Besides Yahoo's consensus, three keyed feeds are queried through their official APIs when you
+set your own key (keys are read from the environment and never stored in evidence or reports):
+
+| Source key | Env var | What is used | Free-tier notes |
+|---|---|---|---|
+| `finnhub` | `FINNHUB_API_KEY` | recommendation trends; price target | price target needs a paid plan (reported as partial) |
+| `fmp` | `FMP_API_KEY` | `price-target-consensus`, `grades-consensus` | no as-of date; retrieval date is used and noted |
+| `alphavantage` | `ALPHAVANTAGE_API_KEY` | `OVERVIEW` target price and rating counts | 25 calls/day; throttle messages shown as unavailable |
+
+Without a key the source shows as "not configured" in the comparison panel. Each provider gets a
+price-target row and an analyst-rating-mix row (counts plus a mean on the 1=strong-buy..5=strong-sell
+scale). Rows are never averaged; a mean-only target that matches another source's mean is flagged
+as a duplicate (Alpha Vantage typically republishes the same consensus). Fidelity and MSN remain
+link-only.
+
 ### Watchlists
 
 ```bash
@@ -111,5 +128,4 @@ Refresh them with `SEC_USER_AGENT="name email" python scripts/capture_fixtures.p
 - Done: single-ticker core, forecast comparison with duplicate/stale/outlier flags, critic/auditor
   revision loop, web UI with run history and scenario sliders, fixture evaluation set (unprofitable
   growth, bank, ADR, recent IPO, ambiguous ticker), SQLite run history, watchlists with
-  data/thesis-change alerts.
-- Next: more permitted forecast sources.
+  data/thesis-change alerts, keyed forecast feeds (Finnhub, Financial Modeling Prep, Alpha Vantage).

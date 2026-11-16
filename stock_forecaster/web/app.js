@@ -405,7 +405,8 @@
     let html = '<div class="callout">External forecasts are source opinions shown for comparison; they are not averaged and carry no weight beyond context. Duplicates, stale entries, and outliers are flagged rather than removed.</div>';
     html += "<table><thead><tr><th>Source</th><th>Type</th><th>Horizon</th><th class=num>Low</th><th class=num>Mean</th><th class=num>High</th><th>As of</th><th class=num>Analysts</th><th>Method</th><th>Weight</th><th>Flags</th><th>Evidence</th></tr></thead><tbody>";
     for (const f of fc) {
-      const unavailable = f.value_mean == null && f.value_low == null && f.value_high == null;
+      const unavailable = f.status === "unavailable" || (f.ratings == null && f.value_mean == null && f.value_low == null && f.value_high == null);
+      const mix = f.ratings ? `rating ${f.rating_mean} <small>(SB/B/H/S/SS ${["strong_buy", "buy", "hold", "sell", "strong_sell"].map((k) => f.ratings[k] ?? 0).join("/")})</small>` : null;
       const flags = [];
       if (f.duplicate_of) flags.push(`<span class="badge warn">duplicate of ${esc(f.duplicate_of)}</span>`);
       if (f.stale) flags.push('<span class="badge warn">stale</span>');
@@ -413,7 +414,7 @@
       if (unavailable) flags.push('<span class="badge muted">unavailable</span>');
       if ((f.notes || []).some((n) => /user/i.test(n))) flags.push('<span class="badge muted">user-supplied</span>');
       html += `<tr class="${unavailable ? "unavailable" : ""}"><td>${f.url ? `<a href="${esc(f.url)}" target="_blank" rel="noopener">${esc(f.source)}</a>` : esc(f.source)}</td><td>${esc(f.forecast_type)}</td><td>${esc(f.horizon)}</td>
-        <td class=num>${money(f.value_low)}</td><td class=num>${money(f.value_mean)}</td><td class=num>${money(f.value_high)}</td><td>${esc(f.as_of || "—")}</td><td class=num>${f.analyst_count ?? "—"}</td>
+        ${mix ? `<td colspan=3 class=num>${mix}</td>` : `<td class=num>${money(f.value_low)}</td><td class=num>${money(f.value_mean)}</td><td class=num>${money(f.value_high)}</td>`}<td>${esc(f.as_of || "—")}</td><td class=num>${f.analyst_count ?? "—"}</td>
         <td>${f.method_disclosed ? "disclosed" : "opaque"}</td><td>${esc(f.weight)}</td><td>${flags.join(" ")}${(f.notes || []).length ? `<br><small>${esc(f.notes.join("; "))}</small>` : ""}</td>
         <td>${(f.evidence_ids || []).map((id) => `<span class="cite" data-ev="${esc(id)}">[${esc(id)}]</span>`).join(" ")}</td></tr>`;
     }

@@ -7,6 +7,7 @@ from __future__ import annotations
 from .ledger import EvidenceLedger
 from .llm.provider import LLMError, LLMProvider
 from .models import DISCLAIMER, AnalysisResult, EvidenceRecord, RetrievalStatus
+from .validation import RATING_KINDS
 
 
 def _n(x: object, digits: int = 2) -> str:
@@ -302,11 +303,13 @@ def render_report(result: AnalysisResult, ledger: EvidenceLedger, provider: LLMP
     )
     lines.append("|---|---|---|---|---|---|---|---|---|---|")
     for f in result.forecasts:
-        rng = (
-            "unavailable"
-            if f.status == RetrievalStatus.UNAVAILABLE
-            else f"{_n(f.value_low)} / {_n(f.value_mean)} / {_n(f.value_high)} (low/mean/high)"
-        )
+        if f.status == RetrievalStatus.UNAVAILABLE:
+            rng = "unavailable" + (f" ({'; '.join(f.notes)})" if f.notes else "")
+        elif f.ratings is not None:
+            mix = "/".join(str(f.ratings.get(k, 0)) for k in RATING_KINDS)
+            rng = f"rating mean {f.rating_mean} (SB/B/H/S/SS {mix})"
+        else:
+            rng = f"{_n(f.value_low)} / {_n(f.value_mean)} / {_n(f.value_high)} (low/mean/high)"
         flags = [
             *(["duplicate of " + f.duplicate_of] if f.duplicate_of else []),
             *(["stale"] if f.stale else []),

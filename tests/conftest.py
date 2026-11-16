@@ -43,6 +43,8 @@ def isolated_db(tmp_path, monkeypatch):
 
     path = tmp_path / "runs.db"
     monkeypatch.setenv("STOCK_FORECASTER_DB", str(path))
+    for var in ("FINNHUB_API_KEY", "FMP_API_KEY", "ALPHAVANTAGE_API_KEY"):
+        monkeypatch.delenv(var, raising=False)
     monkeypatch.setattr(api, "_store", None)
     yield path
     if api._store is not None:

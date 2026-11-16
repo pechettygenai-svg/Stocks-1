@@ -7,6 +7,7 @@ from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor
 
 from .adapters import (
+    KEYED_FORECAST_ADAPTERS,
     EvidenceAdapter,
     SecEdgarAdapter,
     UserForecastAdapter,
@@ -40,6 +41,7 @@ def default_adapters(request: AnalysisRequest) -> list[EvidenceAdapter]:
         "sec": SecEdgarAdapter,
         "fidelity": fidelity_adapter,
         "msn": msn_adapter,
+        **KEYED_FORECAST_ADAPTERS,
     }
     adapters = [registry[s]() for s in request.include_sources if s in registry]
     if request.user_forecasts:

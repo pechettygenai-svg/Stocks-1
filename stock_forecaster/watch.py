@@ -89,6 +89,7 @@ def snapshot(result: AnalysisResult) -> Snapshot:
             "mean": f.value_mean,
             "high": f.value_high,
             "analyst_count": f.analyst_count,
+            "rating_mean": f.rating_mean,
         }
     data["unavailable"] = sorted(
         {
@@ -192,6 +193,13 @@ def diff(prev: Snapshot, cur: Snapshot) -> list[Change]:
                     and abs(ac - bc) >= ANALYST_COUNT_ABS
                 ):
                     moved.append(f"analysts {bc} -> {ac}")
+                br, ar = b.get("rating_mean"), a.get("rating_mean")
+                if (
+                    isinstance(br, int | float)
+                    and isinstance(ar, int | float)
+                    and abs(ar - br) >= RECOMMENDATION_ABS
+                ):
+                    moved.append(f"rating mean {br} -> {ar}")
                 if not moved:
                     continue
                 msg = f"{name}: " + ", ".join(moved)
