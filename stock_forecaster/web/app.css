@@ -80,3 +80,23 @@ article code { font-family: var(--mono); background: #0f1216; padding: 1px 4px; 
 article a { color: var(--accent); }
 article .cite { font-family: var(--mono); font-size: 11px; color: var(--accent); cursor: pointer; }
 .error { color: var(--bad); }
+
+.watch { margin-top: 12px; }
+.watch .hint { font-size: 12px; color: var(--muted); margin: 0 0 8px; }
+.wl-form { padding: 0; border: 0; background: transparent; display: grid; gap: 6px; }
+.wl-form button.ghost { margin: 0 0 8px; }
+.wl { border-top: 1px solid var(--line); padding: 8px 0; }
+.wl-head { display: flex; justify-content: space-between; align-items: center; gap: 6px; }
+.wl-head .t { font-weight: 600; }
+.wl-head button { padding: 3px 8px; font-size: 12px; }
+.wl-items { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 6px; }
+.chip { font-size: 12px; border: 1px solid var(--line); border-radius: 10px; padding: 1px 8px; cursor: pointer; }
+.chip.err { border-color: var(--bad); color: var(--bad); }
+.chip.pending { color: var(--muted); border-style: dashed; }
+.chip .x { margin-left: 4px; color: var(--muted); }
+.wl-add { display: flex; gap: 4px; margin-top: 6px; }
+.wl-add input { margin: 0; }
+#alerts li { display: block; cursor: default; }
+#alerts li .chg { font-size: 12px; margin: 2px 0 0 10px; }
+#alerts li .chg.thesis { color: var(--warn); }
+#alerts li button { padding: 2px 8px; font-size: 12px; float: right; }

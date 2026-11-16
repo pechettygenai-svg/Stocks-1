@@ -45,6 +45,29 @@ API: `POST /v1/analyses`, `GET /v1/analyses[?ticker=]` (history), `GET /v1/analy
 `~/.stock_forecaster/runs.db`, or `serve --db PATH`) and survives restarts; runs that were mid-pipeline
 when the server stopped are marked failed (`interrupted`) on the next start.
 
+### Watchlists
+
+```bash
+curl -X POST localhost:8000/v1/watchlists -H 'content-type: application/json' \
+     -d '{"name": "core", "horizon": "12m", "tickers": ["AAPL", "JPM", "BRK.B"]}'
+curl -X POST localhost:8000/v1/watchlists/1/check     # or the "Check now" button in the UI
+curl localhost:8000/v1/alerts                         # POST /v1/alerts/{id}/ack to dismiss
+stock-forecaster watch-check [--name core]            # for cron; exit code 3 when an alert fired
+```
+
+A check re-runs the normal pipeline for every ticker and compares it with that ticker's last
+successful run. The first check only records a baseline. After that an alert is raised only for:
+
+- **data changes**: a new or restated SEC filing value, a consensus field moving >= 2%
+  (recommendation mean >= 0.2), an external forecast row changing, a source becoming (un)available;
+- **thesis changes**: scenario mode (e.g. earnings -> sales), price leaving the previous run's
+  Bear-low..Bull-high range, a new or cleared red flag, quality-gate failures, blocking review findings.
+
+Price drift inside the previously modeled range produces no alert. A failed check is recorded in
+history but neither raises an alert nor replaces the baseline. Endpoints: `GET|POST /v1/watchlists`,
+`GET|DELETE /v1/watchlists/{id}`, `POST /v1/watchlists/{id}/tickers`,
+`DELETE /v1/watchlists/{id}/tickers/{ticker}`, `POST /v1/watchlists/{id}/check`, `GET /v1/alerts`.
+
 The web UI (served from `stock_forecaster/web/`, no build step) has a ticker/horizon form with live
 stage status, the cited report, and tabs for scenarios (with local sliders that re-run the same formula),
 the external forecast comparison panel, fundamentals/technicals, valuation, the evidence ledger, and the
@@ -87,6 +110,6 @@ Refresh them with `SEC_USER_AGENT="name email" python scripts/capture_fixtures.p
 
 - Done: single-ticker core, forecast comparison with duplicate/stale/outlier flags, critic/auditor
   revision loop, web UI with run history and scenario sliders, fixture evaluation set (unprofitable
-  growth, bank, ADR, recent IPO, ambiguous ticker), SQLite run history.
-- Next: more permitted forecast sources, watchlists (alerts only for
-  data/thesis changes).
+  growth, bank, ADR, recent IPO, ambiguous ticker), SQLite run history, watchlists with
+  data/thesis-change alerts.
+- Next: more permitted forecast sources.
