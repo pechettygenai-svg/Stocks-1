@@ -19,10 +19,21 @@ def utc_now() -> datetime:
     return datetime.now(timezone.utc)
 
 
+# Yahoo exchange suffixes (VOD.L, SHOP.TO, 7203.T); a '.' before these is kept.
+EXCHANGE_SUFFIXES = frozenset(
+    "L T F DE PA TO V NE CN HK AX NZ SS SZ KS KQ NS BO SW MI AS BR MC ST OL CO HE IC LS IR "
+    "VI WA PR BD AT IS TA SA MX BA SN JO SI JK BK KL TW TWO SR QA KW CR".split()
+)
+
+
 def normalize_ticker(ticker: str) -> str:
     """Canonical symbol used by Yahoo and the SEC ticker map: upper case with
-    share-class separators written as '-' (BRK.B, BRK/B, BRK B -> BRK-B)."""
+    share-class separators written as '-' (BRK.B, BRK/B, BRK B -> BRK-B), while
+    exchange suffixes stay dotted (VOD.L)."""
     t = ticker.strip().upper()
+    base, dot, suffix = t.rpartition(".")
+    if dot and base and suffix in EXCHANGE_SUFFIXES:
+        return f"{normalize_ticker(base)}.{suffix}"
     return re.sub(r"[./\s]+", "-", t).strip("-")
 
 

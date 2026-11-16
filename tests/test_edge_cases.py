@@ -97,7 +97,16 @@ def test_recent_ipo_degrades_gracefully(results):
 
 @pytest.mark.parametrize(
     "raw,expected",
-    [("brk.b", "BRK-B"), ("BRK/B", "BRK-B"), (" brk b ", "BRK-B"), ("aapl", "AAPL")],
+    [
+        ("brk.b", "BRK-B"),
+        ("BRK/B", "BRK-B"),
+        (" brk b ", "BRK-B"),
+        ("aapl", "AAPL"),
+        ("vod.l", "VOD.L"),
+        ("shop.to", "SHOP.TO"),
+        ("7203.T", "7203.T"),
+        ("bbd.b.to", "BBD-B.TO"),
+    ],
 )
 def test_normalize_ticker(raw, expected):
     assert normalize_ticker(raw) == expected
