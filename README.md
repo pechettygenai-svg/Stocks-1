@@ -40,7 +40,10 @@ stock-forecaster analyze AAPL --horizon 12m --out out/AAPL.md --json-out out/AAP
 stock-forecaster serve --port 8000                         # web UI at http://localhost:8000, Swagger at /docs
 ```
 
-API: `POST /v1/analyses`, `GET /v1/analyses` (history, in-memory), `GET /v1/analyses/{id}[/evidence|/report|/full]`.
+API: `POST /v1/analyses`, `GET /v1/analyses[?ticker=]` (history), `GET /v1/analyses/{id}[/evidence|/report|/full]`,
+`DELETE /v1/analyses/{id}`. Run history is stored in SQLite at `$STOCK_FORECASTER_DB` (default
+`~/.stock_forecaster/runs.db`, or `serve --db PATH`) and survives restarts; runs that were mid-pipeline
+when the server stopped are marked failed (`interrupted`) on the next start.
 
 The web UI (served from `stock_forecaster/web/`, no build step) has a ticker/horizon form with live
 stage status, the cited report, and tabs for scenarios (with local sliders that re-run the same formula),
@@ -84,6 +87,6 @@ Refresh them with `SEC_USER_AGENT="name email" python scripts/capture_fixtures.p
 
 - Done: single-ticker core, forecast comparison with duplicate/stale/outlier flags, critic/auditor
   revision loop, web UI with run history and scenario sliders, fixture evaluation set (unprofitable
-  growth, bank, ADR, recent IPO, ambiguous ticker).
-- Next: persistent run storage, more permitted forecast sources, watchlists (alerts only for
+  growth, bank, ADR, recent IPO, ambiguous ticker), SQLite run history.
+- Next: more permitted forecast sources, watchlists (alerts only for
   data/thesis changes).

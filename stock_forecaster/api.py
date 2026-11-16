@@ -11,8 +11,16 @@ from fastapi import BackgroundTasks, FastAPI, HTTPException
 from fastapi.responses import FileResponse, PlainTextResponse
 from fastapi.staticfiles import StaticFiles
 
-from .models import DISCLAIMER, AnalysisRequest, AnalysisResult, RunStatus, utc_now
+from .models import (
+    DISCLAIMER,
+    AnalysisRequest,
+    AnalysisResult,
+    RunStatus,
+    normalize_ticker,
+    utc_now,
+)
 from .pipeline import run_analysis
+from .store import RunStore
 
 app = FastAPI(
     title="Stock Forecasting Agent",
@@ -20,21 +28,50 @@ app = FastAPI(
     version="0.1.0",
 )
 
-_runs: dict[str, AnalysisResult] = {}
-_lock = threading.Lock()
 _STATIC = Path(__file__).parent / "web"
+_store: RunStore | None = None
+_store_lock = threading.Lock()
+
+
+def get_store() -> RunStore:
+    """Opened lazily so `STOCK_FORECASTER_DB` (or `configure_store`) applies."""
+    global _store
+    with _store_lock:
+        if _store is None:
+            _store = RunStore()
+            _store.mark_interrupted()
+        return _store
+
+
+def configure_store(path: str | None = None) -> RunStore:
+    global _store
+    with _store_lock:
+        if _store is not None:
+            _store.close()
+        _store = RunStore(path)
+        _store.mark_interrupted()
+        return _store
 
 
 def _execute(run_id: str, request: AnalysisRequest) -> None:
-    def on_status(s: RunStatus) -> None:
-        with _lock:
-            if run_id in _runs:
-                _runs[run_id].status = s
+    store = get_store()
 
-    result = run_analysis(request, on_status=on_status)
+    def on_status(s: RunStatus) -> None:
+        store.set_status(run_id, s)
+
+    try:
+        result = run_analysis(request, on_status=on_status)
+    except Exception as exc:  # run_analysis records its own failures; this is a backstop
+        result = AnalysisResult(
+            run_id=run_id,
+            request=request,
+            status=RunStatus.FAILED,
+            started_at=utc_now(),
+            finished_at=utc_now(),
+            error=f"{type(exc).__name__}: {exc}",
+        )
     result.run_id = run_id
-    with _lock:
-        _runs[run_id] = result
+    store.save(result)
 
 
 @app.post("/v1/analyses", status_code=202)
@@ -43,40 +80,30 @@ def create_analysis(request: AnalysisRequest, background: BackgroundTasks) -> di
     placeholder = AnalysisResult(
         run_id=run_id, request=request, status=RunStatus.QUEUED, started_at=utc_now()
     )
-    with _lock:
-        _runs[run_id] = placeholder
+    get_store().save(placeholder)
     background.add_task(_execute, run_id, request)
     return {"run_id": run_id, "status": RunStatus.QUEUED.value, "disclaimer": DISCLAIMER}
 
 
 def _get(run_id: str) -> AnalysisResult:
-    with _lock:
-        r = _runs.get(run_id)
+    r = get_store().get(run_id)
     if r is None:
         raise HTTPException(404, "run not found")
     return r
 
 
 @app.get("/v1/analyses")
-def list_analyses() -> list[dict[str, Any]]:
-    """Run history (in-memory; newest first)."""
-    with _lock:
-        runs = list(_runs.values())
-    runs.sort(key=lambda r: r.started_at, reverse=True)
-    return [
-        {
-            "run_id": r.run_id,
-            "ticker": r.request.ticker.upper(),
-            "company_name": r.company_name,
-            "horizon": r.request.horizon.value,
-            "status": r.status.value,
-            "started_at": r.started_at.isoformat(),
-            "finished_at": r.finished_at.isoformat() if r.finished_at else None,
-            "quality_gate_failures": len(r.quality_gate_failures),
-            "error": r.error,
-        }
-        for r in runs
-    ]
+def list_analyses(ticker: str | None = None, limit: int = 200) -> list[dict[str, Any]]:
+    """Run history, persisted in SQLite (newest first)."""
+    return get_store().list(normalize_ticker(ticker) if ticker else None, min(max(limit, 1), 1000))
+
+
+@app.delete("/v1/analyses/{run_id}", status_code=204)
+def delete_analysis(run_id: str) -> None:
+    r = _get(run_id)
+    if r.status not in (RunStatus.COMPLETE, RunStatus.FAILED):
+        raise HTTPException(409, f"run is {r.status.value}; delete it after it finishes")
+    get_store().delete(run_id)
 
 
 @app.get("/v1/analyses/{run_id}")

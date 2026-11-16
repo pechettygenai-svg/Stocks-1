@@ -9,3 +9,6 @@ build/
 dist/
 .env
 out/
+*.db
+*.db-wal
+*.db-shm
