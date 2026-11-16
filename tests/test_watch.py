@@ -3,6 +3,7 @@ from datetime import date
 from fastapi.testclient import TestClient
 from typer.testing import CliRunner
 
+from stock_forecaster.adapters import unavailable
 from stock_forecaster.models import AnalysisResult, RunStatus
 from stock_forecaster.store import RunStore
 from stock_forecaster.watch import check_item, diff, snapshot
@@ -151,3 +152,58 @@ def test_cli_watch_check_exit_codes(aapl_result, isolated_db, monkeypatch):
     assert first.exit_code == 0 and "baseline" in first.output
     second = runner.invoke(cli.app, ["watch-check", "--db", str(isolated_db)])
     assert second.exit_code == 3 and "[data] eps_forward" in second.output
+
+
+def test_exact_threshold_moves_alert(aapl_result):
+    from stock_forecaster.watch import Snapshot
+
+    def snap(reco, eps):
+        return Snapshot(
+            run_id="r",
+            data={
+                "consensus:recommendation_mean": {"value": reco},
+                "consensus:eps_forward": {"value": eps},
+            },
+        )
+
+    keys = {c.key for c in diff(snap(2.3, 7.0), snap(2.1, 7.14))}
+    assert keys == {"consensus:recommendation_mean", "consensus:eps_forward"}
+
+
+def test_outage_with_new_error_text_is_not_a_change(aapl_result):
+    def down(reason):
+        r = aapl_result.model_copy(deep=True)
+        r.evidence.append(unavailable("SEC EDGAR", "filing", None, reason))
+        return r
+
+    assert diff(snapshot(down("HTTP 503")), snapshot(down("timeout"))) == []
+    [c] = diff(snapshot(aapl_result), snapshot(down("HTTP 503")))
+    assert c.key == "unavailable" and "SEC EDGAR" in c.message
+
+
+def test_price_already_outside_range_does_not_realert(aapl_result):
+    lo = snapshot(aapl_result).thesis["scenario_range"][0]
+    below = _variant(aapl_result, "run-2", price_intraday=lo * 0.9)
+    again = _variant(aapl_result, "run-3", price_intraday=lo * 0.88)
+    assert any(c.key == "scenario_range" for c in diff(snapshot(aapl_result), snapshot(below)))
+    assert not any(c.key == "scenario_range" for c in diff(snapshot(below), snapshot(again)))
+
+
+def test_failed_alert_insert_rolls_back_baseline(aapl_result, isolated_db, monkeypatch):
+    import sqlite3
+
+    import pytest
+
+    store = RunStore(isolated_db)
+    wl = store.create_watchlist("core", "12m", ["AAPL"])
+    check_item(store, wl, "AAPL", "12m", lambda req: aapl_result)
+    changed = _variant(aapl_result, "run-x", eps_forward=999.0)
+    store._db.execute(
+        "CREATE TRIGGER boom BEFORE INSERT ON alerts BEGIN SELECT RAISE(ABORT, 'disk full'); END"
+    )
+    with pytest.raises(sqlite3.IntegrityError):
+        check_item(store, wl, "AAPL", "12m", lambda req: changed)
+    store._db.execute("DROP TRIGGER boom")
+    # baseline was not advanced, so the retry still sees the change
+    retry = check_item(store, wl, "AAPL", "12m", lambda req: changed)
+    assert retry.status == "alert" and len(store.list_alerts()) == 1

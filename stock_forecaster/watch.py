@@ -33,6 +33,11 @@ CONSENSUS_REL = 0.02
 RECOMMENDATION_ABS = 0.2
 ANALYST_COUNT_ABS = 3
 CONSENSUS_FIELDS = ("eps_forward", "recommendation_mean")
+_EPS = 1e-9  # so a move of exactly the threshold counts despite float rounding
+
+
+def _reaches(x: float, limit: float) -> bool:
+    return x >= limit - _EPS
 
 
 class Snapshot(BaseModel):
@@ -91,9 +96,11 @@ def snapshot(result: AnalysisResult) -> Snapshot:
             "analyst_count": f.analyst_count,
             "rating_mean": f.rating_mean,
         }
+    # Keyed by source + field, not the claim text: a continuing outage whose error
+    # message changes is not an availability change.
     data["unavailable"] = sorted(
         {
-            e.claim
+            f"{e.source_name} ({e.field or e.source_type.value})"
             for e in result.evidence
             if e.retrieval_status == RetrievalStatus.UNAVAILABLE and e.field != "cross_check_link"
         }
@@ -123,6 +130,12 @@ def _rel(a: Any, b: Any) -> float:
     if a == b:
         return 0.0
     return abs(b - a) / abs(a) if a else float("inf")
+
+
+def _range_side(p: Any, rng: list[float]) -> int:
+    if not isinstance(p, int | float) or rng[0] <= p <= rng[1]:
+        return 0
+    return -1 if p < rng[0] else 1
 
 
 def _set_changes(
@@ -166,9 +179,9 @@ def diff(prev: Snapshot, cur: Snapshot) -> list[Change]:
             bv, av = (b or {}).get("value"), (a or {}).get("value")
             limit = RECOMMENDATION_ABS if name == "recommendation_mean" else None
             shifted = (
-                abs(av - bv) >= limit
+                _reaches(abs(av - bv), limit)
                 if limit and isinstance(av, int | float) and isinstance(bv, int | float)
-                else _rel(bv, av) >= CONSENSUS_REL
+                else _reaches(_rel(bv, av), CONSENSUS_REL)
             )
             if shifted:
                 changes.append(
@@ -184,13 +197,13 @@ def diff(prev: Snapshot, cur: Snapshot) -> list[Change]:
                 moved = [
                     f"{k} {b.get(k)} -> {a.get(k)}"
                     for k in ("low", "mean", "high")
-                    if _rel(b.get(k), a.get(k)) >= CONSENSUS_REL
+                    if _reaches(_rel(b.get(k), a.get(k)), CONSENSUS_REL)
                 ]
                 bc, ac = b.get("analyst_count"), a.get("analyst_count")
                 if (
                     isinstance(bc, int)
                     and isinstance(ac, int)
-                    and abs(ac - bc) >= ANALYST_COUNT_ABS
+                    and _reaches(abs(ac - bc), ANALYST_COUNT_ABS)
                 ):
                     moved.append(f"analysts {bc} -> {ac}")
                 br, ar = b.get("rating_mean"), a.get("rating_mean")
@@ -223,8 +236,14 @@ def diff(prev: Snapshot, cur: Snapshot) -> list[Change]:
                 message=f"scenario mode: {pt.get('scenario_mode')} -> {ct.get('scenario_mode')}",
             )
         )
-    rng, price = pt.get("scenario_range"), ct.get("price")
-    if rng and isinstance(price, int | float) and not rng[0] <= price <= rng[1]:
+    rng, price, prev_price = pt.get("scenario_range"), ct.get("price"), pt.get("price")
+    # Alert when the price *leaves* the range (or crosses to the other side), not on
+    # every rerun while a baseline that was already outside its range stays there.
+    if (
+        rng
+        and isinstance(price, int | float)
+        and _range_side(price, rng) not in (0, _range_side(prev_price, rng))
+    ):
         side = "below the prior Bear low" if price < rng[0] else "above the prior Bull high"
         changes.append(
             Change(
@@ -273,25 +292,24 @@ def check_item(
         return ItemCheck(ticker=ticker, run_id=result.run_id, status="failed", error=result.error)
 
     cur = snapshot(result)
-    prev_json = store.item_baseline(watchlist_id, ticker)
-    store.update_item(
-        watchlist_id, ticker, run_id=result.run_id, baseline=cur.model_dump_json(), error=None
+
+    def decide(prev_json: str) -> tuple[str | None, list[dict[str, Any]]]:
+        prev = Snapshot.model_validate_json(prev_json)
+        return prev.run_id, [c.model_dump(mode="json") for c in diff(prev, cur)]
+
+    had_baseline, alert_id, changes = store.advance_baseline(
+        watchlist_id, ticker, run_id=result.run_id, baseline=cur.model_dump_json(), decide=decide
     )
-    if prev_json is None:
+    if not had_baseline:
         return ItemCheck(ticker=ticker, run_id=result.run_id, status="baseline")
-    prev = Snapshot.model_validate_json(prev_json)
-    changes = diff(prev, cur)
-    if not changes:
+    if alert_id is None:
         return ItemCheck(ticker=ticker, run_id=result.run_id, status="unchanged")
-    alert_id = store.add_alert(
-        watchlist_id,
-        ticker,
-        run_id=result.run_id,
-        prev_run_id=prev.run_id,
-        changes=[c.model_dump(mode="json") for c in changes],
-    )
     return ItemCheck(
-        ticker=ticker, run_id=result.run_id, status="alert", alert_id=alert_id, changes=changes
+        ticker=ticker,
+        run_id=result.run_id,
+        status="alert",
+        alert_id=alert_id,
+        changes=[Change.model_validate(c) for c in changes],
     )
 
 
