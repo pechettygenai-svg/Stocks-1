@@ -45,6 +45,31 @@ def analyze(
         raise typer.Exit(code=2)
 
 
+@app.command("watch-check")
+def watch_check(
+    name: str | None = typer.Option(None, help="Only this watchlist (default: all)"),
+    db: str | None = typer.Option(None, help="SQLite file (default: $STOCK_FORECASTER_DB)"),
+) -> None:
+    """Re-run watchlists (e.g. from cron). Prints alerts; exit code 3 if any fired."""
+    from .store import RunStore  # noqa: PLC0415
+    from .watch import check_watchlist  # noqa: PLC0415
+
+    store = RunStore(db)
+    lists = [w for w in store.list_watchlists() if name is None or w["name"] == name]
+    if not lists:
+        typer.echo("no matching watchlists", err=True)
+        raise typer.Exit(code=1)
+    fired = 0
+    for wl in lists:
+        for item in check_watchlist(store, wl["id"], lambda req: run_analysis(req)):
+            typer.echo(f"{wl['name']}\t{item.ticker}\t{item.status}\t{item.error or ''}")
+            for c in item.changes:
+                typer.echo(f"  [{c.kind}] {c.message}")
+            fired += item.status == "alert"
+    if fired:
+        raise typer.Exit(code=3)
+
+
 @app.command()
 def serve(
     host: str = "127.0.0.1",
