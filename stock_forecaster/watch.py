@@ -278,7 +278,12 @@ class ItemCheck(BaseModel):
 
 
 def check_item(
-    store: RunStore, watchlist_id: int, ticker: str, horizon: str, runner: Runner
+    store: RunStore,
+    watchlist_id: int,
+    ticker: str,
+    horizon: str,
+    runner: Runner,
+    owner: str = "",
 ) -> ItemCheck:
     """Run one ticker, persist the run, compare with the stored baseline and record
     an alert only when something material changed. A failed run never alerts and
@@ -288,7 +293,7 @@ def check_item(
     except Exception as exc:
         store.update_item(watchlist_id, ticker, error=f"{type(exc).__name__}: {exc}")
         return ItemCheck(ticker=ticker, status="failed", error=str(exc))
-    store.save(result)
+    store.save(result, owner=owner)
     if result.status != RunStatus.COMPLETE:
         store.update_item(watchlist_id, ticker, run_id=result.run_id, error=result.error)
         return ItemCheck(ticker=ticker, run_id=result.run_id, status="failed", error=result.error)
@@ -320,6 +325,6 @@ def check_watchlist(store: RunStore, watchlist_id: int, runner: Runner) -> list[
     if wl is None:
         raise KeyError(watchlist_id)
     return [
-        check_item(store, watchlist_id, item["ticker"], wl["horizon"], runner)
+        check_item(store, watchlist_id, item["ticker"], wl["horizon"], runner, wl["owner"])
         for item in wl["items"]
     ]
