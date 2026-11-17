@@ -24,7 +24,7 @@ if ($path === '') {
     exit;
 }
 if (strpos($path, '..') !== false
-    || !preg_match('#^/(v1(/[A-Za-z0-9_.\-/]*)?|static/[A-Za-z0-9_.\-]+|healthz)?$#', $path)) {
+    || !preg_match('#^/(v1(/[A-Za-z0-9_.\-/^=]*)?|static/[A-Za-z0-9_.\-]+|healthz)?$#', $path)) {
     http_response_code(404);
     exit;
 }
@@ -40,7 +40,9 @@ $ctx = stream_context_create(['http' => [
     'ignore_errors' => true, // pass 4xx/5xx bodies through instead of failing
     'timeout' => 120,
 ]]);
-$body = @file_get_contents($service . $path . $query, false, $ctx);
+// PATH_INFO arrives decoded; re-encode each segment (e.g. ^GSPC, EURUSD=X).
+$forward = implode('/', array_map('rawurlencode', explode('/', $path)));
+$body = @file_get_contents($service . $forward . $query, false, $ctx);
 
 if ($body === false) {
     http_response_code(502);
