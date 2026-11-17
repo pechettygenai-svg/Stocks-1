@@ -97,7 +97,9 @@ def test_ui_and_history_endpoints(aapl_result, monkeypatch):
     monkeypatch.setattr(api, "run_analysis", lambda request, on_status=None: aapl_result)
     client = TestClient(api.app)
     home = client.get("/")
-    assert home.status_code == 200 and DISCLAIMER in home.text and "/static/app.js" in home.text
+    assert (
+        home.status_code == 200 and DISCLAIMER in home.text and 'src="static/app.js"' in home.text
+    )
     assert client.get("/static/app.js").status_code == 200
     assert client.get("/static/app.css").status_code == 200
 
