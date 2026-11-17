@@ -147,3 +147,20 @@ def test_concurrent_openers_migrate_an_old_file_once(isolated_db):
     store = RunStore(isolated_db)
     assert store.get_watchlist(5, owner="") is not None
     store.close()
+
+
+def test_cli_named_check_never_runs_another_users_list(aapl_result, isolated_db, monkeypatch):
+    from typer.testing import CliRunner
+
+    import stock_forecaster.cli as cli
+
+    monkeypatch.setattr(cli, "run_analysis", lambda req: aapl_result)
+    store = RunStore(isolated_db)
+    store.create_watchlist("core", "12m", ["AAPL"], owner="u1")
+    store.create_watchlist("core", "12m", ["AAPL"], owner="u2")
+    runner = CliRunner()
+    base = ["watch-check", "--db", str(isolated_db), "--name", "core"]
+    ambiguous = runner.invoke(cli.app, base)
+    assert ambiguous.exit_code == 1 and store.list_runs() == []
+    assert runner.invoke(cli.app, [*base, "--owner", "u2"]).exit_code == 0
+    assert store.list_runs(owner="u1") == [] and len(store.list_runs(owner="u2")) == 1
