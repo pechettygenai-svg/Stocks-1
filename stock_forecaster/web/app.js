@@ -142,7 +142,7 @@
     $("#run-btn").disabled = true;
     renderStatus("queued");
     try {
-      const run = await api("/v1/analyses", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) });
+      const run = await api("v1/analyses", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) });
       await poll(run.run_id);
     } catch (err) {
       renderStatus(null, err.message);
@@ -153,7 +153,7 @@
 
   async function poll(runId) {
     clearTimeout(pollTimer);
-    const s = await api(`/v1/analyses/${runId}`);
+    const s = await api(`v1/analyses/${runId}`);
     renderStatus(s.status, s.error);
     if (s.status === "complete" || s.status === "failed") {
       $("#run-btn").disabled = false;
@@ -168,7 +168,7 @@
   async function loadHistory() {
     const list = $("#history");
     try {
-      const runs = await api("/v1/analyses");
+      const runs = await api("v1/analyses");
       if (!runs.length) { list.innerHTML = '<li class="s">No runs yet.</li>'; return; }
       list.innerHTML = runs.map((r) => `
         <li data-run="${esc(r.run_id)}">
@@ -198,10 +198,10 @@
   async function loadWatchlists() {
     const box = $("#wl-lists");
     try {
-      const lists = await api("/v1/watchlists");
+      const lists = await api("v1/watchlists");
       if (!lists.length) { box.innerHTML = '<p class="s hint">No watchlists yet.</p>'; }
       else {
-        const full = await Promise.all(lists.map((w) => api(`/v1/watchlists/${w.id}`)));
+        const full = await Promise.all(lists.map((w) => api(`v1/watchlists/${w.id}`)));
         box.innerHTML = full.map((w, i) => `
           <div class="wl" data-wl="${w.id}">
             <div class="wl-head">
@@ -226,7 +226,7 @@
   function pollWatchlist(id) {
     clearTimeout(wlTimers[id]);
     wlTimers[id] = setTimeout(async () => {
-      const w = await api(`/v1/watchlists/${id}`).catch(() => null);
+      const w = await api(`v1/watchlists/${id}`).catch(() => null);
       if (w && w.checking) return pollWatchlist(id);
       loadWatchlists();
       loadHistory();
@@ -236,7 +236,7 @@
   async function loadAlerts() {
     const list = $("#alerts");
     try {
-      const alerts = await api("/v1/alerts");
+      const alerts = await api("v1/alerts");
       if (!alerts.length) { list.innerHTML = '<li class="s">No open alerts.</li>'; return; }
       list.innerHTML = alerts.map((a) => `
         <li>
@@ -252,7 +252,7 @@
     ev.preventDefault();
     const tickers = $("#wl-tickers").value.split(/[,\s]+/).filter(Boolean);
     try {
-      await send("/v1/watchlists", "POST", { name: $("#wl-name").value, horizon: $("#horizon").value, tickers });
+      await send("v1/watchlists", "POST", { name: $("#wl-name").value, horizon: $("#horizon").value, tickers });
       $("#wl-name").value = ""; $("#wl-tickers").value = "";
       loadWatchlists();
     } catch (e) { alert(e.message); }
@@ -265,17 +265,17 @@
     try {
       if (t.classList.contains("wl-check")) {
         t.disabled = true; t.textContent = "checking…";
-        await send(`/v1/watchlists/${id}/check`, "POST");
+        await send(`v1/watchlists/${id}/check`, "POST");
         pollWatchlist(id);
       } else if (t.classList.contains("wl-del")) {
-        if (confirm("Delete this watchlist and its alerts?")) { await send(`/v1/watchlists/${id}`, "DELETE"); loadWatchlists(); }
+        if (confirm("Delete this watchlist and its alerts?")) { await send(`v1/watchlists/${id}`, "DELETE"); loadWatchlists(); }
       } else if (t.classList.contains("x")) {
-        await send(`/v1/watchlists/${id}/tickers/${encodeURIComponent(t.parentElement.dataset.t)}`, "DELETE");
+        await send(`v1/watchlists/${id}/tickers/${encodeURIComponent(t.parentElement.dataset.t)}`, "DELETE");
         loadWatchlists();
       } else if (t.classList.contains("chip") && t.dataset.run) {
         show(t.dataset.run);
       } else if (t.dataset.ack) {
-        await send(`/v1/alerts/${t.dataset.ack}/ack`, "POST");
+        await send(`v1/alerts/${t.dataset.ack}/ack`, "POST");
         loadWatchlists();
       } else if (t.tagName === "A" && t.dataset.run) {
         ev.preventDefault();
@@ -290,14 +290,14 @@
     const input = $("input", ev.target);
     const id = ev.target.closest("[data-wl]").dataset.wl;
     try {
-      await send(`/v1/watchlists/${id}/tickers`, "POST", { ticker: input.value });
+      await send(`v1/watchlists/${id}/tickers`, "POST", { ticker: input.value });
       loadWatchlists();
     } catch (e) { alert(e.message); }
   });
 
   // ---------- result rendering ----------
   async function show(runId) {
-    const res = await api(`/v1/analyses/${runId}/full`);
+    const res = await api(`v1/analyses/${runId}/full`);
     current = res;
     $("#empty").hidden = true;
     $("#result").hidden = false;
@@ -533,4 +533,11 @@
 
   loadHistory();
   loadWatchlists();
+
+  // ?ticker=XYZ (e.g. a link from a host site's stock grid) starts an analysis.
+  const linked = new URLSearchParams(location.search).get("ticker");
+  if (linked) {
+    $("#ticker").value = linked;
+    form.requestSubmit();
+  }
 })();
