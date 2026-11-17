@@ -11,7 +11,7 @@ if (empty($sessData['userLoggedIn']) || empty($sessData['userID'])) {
     exit;
 }
 include 'Welcome.php';
-$ticker = isset($_GET['ticker']) ? strtoupper(preg_replace('/[^A-Za-z0-9.\-^=]/', '', $_GET['ticker'])) : '';
+$ticker = isset($_GET['ticker']) ? strtoupper(preg_replace('/[^A-Za-z0-9.\-^=/ ]/', '', $_GET['ticker'])) : '';
 $src = 'sf_proxy.php/' . ($ticker !== '' ? '?ticker=' . rawurlencode($ticker) : '');
 ?>
 <div style="position:absolute; top:120px; left:0; right:0; bottom:0;">
