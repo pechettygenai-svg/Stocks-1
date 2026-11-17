@@ -33,6 +33,9 @@ $headers = ['Accept: ' . (isset($_SERVER['HTTP_ACCEPT']) ? $_SERVER['HTTP_ACCEPT
 if (!empty($_SERVER['CONTENT_TYPE'])) {
     $headers[] = 'Content-Type: ' . $_SERVER['CONTENT_TYPE'];
 }
+// Scopes run history and watchlists to the logged-in user. Built here, never copied
+// from the browser's request, so a user can't read someone else's data.
+$headers[] = 'X-SF-User: u' . (int) $_SESSION['sessData']['userID'];
 $ctx = stream_context_create(['http' => [
     'method' => $_SERVER['REQUEST_METHOD'],
     'header' => implode("\r\n", $headers),
