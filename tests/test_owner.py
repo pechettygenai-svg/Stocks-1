@@ -120,3 +120,30 @@ def test_database_from_before_owners_is_migrated(aapl_result, isolated_db):
     assert store.list_alerts(owner="", include_acknowledged=True) == []  # cascade still works
     store.close()
     RunStore(isolated_db).close()  # reopening a migrated file is a no-op
+
+
+def test_concurrent_openers_migrate_an_old_file_once(isolated_db):
+    import threading
+
+    db = sqlite3.connect(isolated_db)
+    db.executescript(OLD_SCHEMA)
+    db.close()
+    barrier = threading.Barrier(4)
+    errors: list[BaseException] = []
+
+    def open_store() -> None:
+        barrier.wait()
+        try:
+            RunStore(isolated_db).close()
+        except BaseException as exc:  # noqa: BLE001
+            errors.append(exc)
+
+    threads = [threading.Thread(target=open_store) for _ in range(4)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+    assert errors == []
+    store = RunStore(isolated_db)
+    assert store.get_watchlist(5, owner="") is not None
+    store.close()

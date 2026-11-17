@@ -83,24 +83,38 @@ def _columns(db: sqlite3.Connection, table: str) -> set[str]:
 
 def _migrate(db: sqlite3.Connection) -> None:
     """Add `owner` to databases created before per-user data. Existing rows stay
-    with the empty owner (the standalone app)."""
-    cols = {t: _columns(db, t) for t in ("runs", "watchlists")}
-    if cols["runs"] and "owner" not in cols["runs"]:
-        db.execute("ALTER TABLE runs ADD COLUMN owner TEXT NOT NULL DEFAULT ''")
-    if cols["watchlists"] and "owner" not in cols["watchlists"]:
-        # Rebuild to swap UNIQUE(name) for UNIQUE(owner, name); ids are kept, and with
-        # foreign keys off and legacy_alter_table on, child tables keep their references.
-        db.executescript(
-            "PRAGMA foreign_keys = OFF; PRAGMA legacy_alter_table = ON; BEGIN;"
-            "ALTER TABLE watchlists RENAME TO watchlists_old;"
-            "CREATE TABLE watchlists (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL,"
-            " horizon TEXT NOT NULL, created_at TEXT NOT NULL, owner TEXT NOT NULL DEFAULT '',"
-            " UNIQUE (owner, name));"
-            "INSERT INTO watchlists (id, name, horizon, created_at)"
-            " SELECT id, name, horizon, created_at FROM watchlists_old;"
-            "DROP TABLE watchlists_old; COMMIT;"
-            "PRAGMA legacy_alter_table = OFF; PRAGMA foreign_keys = ON;"
-        )
+    with the empty owner (the standalone app). BEGIN IMMEDIATE serializes processes
+    opening the same old file at once; the loser re-reads the upgraded schema."""
+    # Only changeable outside a transaction. With foreign keys off and legacy_alter_table
+    # on, the watchlists rebuild keeps child tables pointing at `watchlists`.
+    db.execute("PRAGMA foreign_keys = OFF")
+    db.execute("PRAGMA legacy_alter_table = ON")
+    try:
+        db.execute("BEGIN IMMEDIATE")
+        try:
+            cols = {t: _columns(db, t) for t in ("runs", "watchlists")}
+            if cols["runs"] and "owner" not in cols["runs"]:
+                db.execute("ALTER TABLE runs ADD COLUMN owner TEXT NOT NULL DEFAULT ''")
+            if cols["watchlists"] and "owner" not in cols["watchlists"]:
+                # Rebuild to swap UNIQUE(name) for UNIQUE(owner, name); ids are kept.
+                db.execute("ALTER TABLE watchlists RENAME TO watchlists_old")
+                db.execute(
+                    "CREATE TABLE watchlists (id INTEGER PRIMARY KEY AUTOINCREMENT,"
+                    " name TEXT NOT NULL, horizon TEXT NOT NULL, created_at TEXT NOT NULL,"
+                    " owner TEXT NOT NULL DEFAULT '', UNIQUE (owner, name))"
+                )
+                db.execute(
+                    "INSERT INTO watchlists (id, name, horizon, created_at)"
+                    " SELECT id, name, horizon, created_at FROM watchlists_old"
+                )
+                db.execute("DROP TABLE watchlists_old")
+            db.execute("COMMIT")
+        except BaseException:
+            db.execute("ROLLBACK")
+            raise
+    finally:
+        db.execute("PRAGMA legacy_alter_table = OFF")
+        db.execute("PRAGMA foreign_keys = ON")
 
 
 def default_db_path() -> str:
