@@ -11,19 +11,22 @@ PRICES = {"AAPL": 231.4, "BRK-B": 593.0}
 def _fake(symbol):
     if symbol == "BOOM":
         raise RuntimeError("provider down")
+    if symbol == "GONE":
+        raise KeyError("currentTradingPeriod")
     return {"price": PRICES.get(symbol), "previous_close": 1.0, "currency": "USD"}
 
 
 def test_quotes_batch_reports_each_ticker(monkeypatch):
     monkeypatch.setattr(quotes, "_yahoo_fetch", _fake)
-    r = TestClient(api.app).get("/v1/quotes", params={"tickers": "aapl, BRK.B,ZZZZ,BOOM,AAPL"})
+    r = TestClient(api.app).get("/v1/quotes", params={"tickers": "aapl, BRK.B,ZZZZ,BOOM,GONE,AAPL"})
     assert r.status_code == 200
     by = {q["ticker"]: q for q in r.json()["quotes"]}
-    assert list(by) == ["AAPL", "BRK.B", "ZZZZ", "BOOM"]
+    assert list(by) == ["AAPL", "BRK.B", "ZZZZ", "BOOM", "GONE"]
     assert by["AAPL"]["price"] == 231.4 and by["AAPL"]["status"] == "ok"
     assert by["BRK.B"]["symbol"] == "BRK-B" and by["BRK.B"]["price"] == 593.0
     assert by["ZZZZ"]["status"] == "unavailable" and by["ZZZZ"]["price"] is None
     assert by["BOOM"]["status"] == "unavailable" and "provider down" in by["BOOM"]["error"]
+    assert by["GONE"]["error"] == quotes.NO_QUOTE
     assert "Yahoo" in r.json()["source"]
 
 

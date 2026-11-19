@@ -16,6 +16,7 @@ from .models import normalize_ticker
 MAX_TICKERS = 50
 VALID_TICKER = re.compile(r"^[A-Za-z0-9.\-^=/]{1,20}$")
 SOURCE_NOTE = "Yahoo Finance via yfinance; may be delayed."
+NO_QUOTE = "no quote returned (unknown or delisted symbol)"
 
 Fetcher = Callable[[str], dict[str, Any]]
 
@@ -52,12 +53,16 @@ def get_quotes(tickers: list[str], fetch: Fetcher | None = None) -> list[dict[st
         }
         try:
             data = fetch(symbol)
+        except KeyError:
+            # yfinance raises KeyError on fields missing for unknown symbols.
+            out.update(status="unavailable", error=NO_QUOTE)
+            return out
         except Exception as exc:  # noqa: BLE001 - any provider failure is reported per ticker
             out.update(status="unavailable", error=str(exc)[:200] or type(exc).__name__)
             return out
         price = _num(data.get("price"))
         if price is None:
-            out.update(status="unavailable", error="no price returned (unknown or delisted symbol)")
+            out.update(status="unavailable", error=NO_QUOTE)
             return out
         currency = data.get("currency")
         out.update(
