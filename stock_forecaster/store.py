@@ -2,6 +2,9 @@
 
 One row per run: summary columns for the history list, plus the full
 `AnalysisResult` JSON so a stored run renders exactly as it did when it finished.
+
+Runs and watchlists carry an `owner` (empty for the standalone app). Methods take
+`owner=None` to mean "any owner" (CLI, internal use) or a string to scope to one user.
 """
 
 from __future__ import annotations
@@ -31,15 +34,19 @@ CREATE TABLE IF NOT EXISTS runs (
     company_name  TEXT,
     gate_failures INTEGER NOT NULL DEFAULT 0,
     error         TEXT,
-    result_json   TEXT NOT NULL
+    result_json   TEXT NOT NULL,
+    owner         TEXT NOT NULL DEFAULT ''
 );
 CREATE INDEX IF NOT EXISTS runs_started ON runs (started_at DESC);
 CREATE INDEX IF NOT EXISTS runs_ticker ON runs (ticker, started_at DESC);
+CREATE INDEX IF NOT EXISTS runs_owner ON runs (owner, started_at DESC);
 CREATE TABLE IF NOT EXISTS watchlists (
     id         INTEGER PRIMARY KEY AUTOINCREMENT,
-    name       TEXT NOT NULL UNIQUE,
+    name       TEXT NOT NULL,
     horizon    TEXT NOT NULL,
-    created_at TEXT NOT NULL
+    created_at TEXT NOT NULL,
+    owner      TEXT NOT NULL DEFAULT '',
+    UNIQUE (owner, name)
 );
 CREATE TABLE IF NOT EXISTS watchlist_items (
     watchlist_id    INTEGER NOT NULL REFERENCES watchlists(id) ON DELETE CASCADE,
@@ -64,6 +71,51 @@ CREATE TABLE IF NOT EXISTS alerts (
 CREATE INDEX IF NOT EXISTS alerts_wl ON alerts (watchlist_id, created_at DESC);
 """
 
+_RUN_COLS = (
+    "run_id, ticker, horizon, status, started_at, finished_at, company_name, "
+    "gate_failures, error, result_json"
+)
+
+
+def _columns(db: sqlite3.Connection, table: str) -> set[str]:
+    return {r[1] for r in db.execute(f"PRAGMA table_info({table})")}
+
+
+def _migrate(db: sqlite3.Connection) -> None:
+    """Add `owner` to databases created before per-user data. Existing rows stay
+    with the empty owner (the standalone app). BEGIN IMMEDIATE serializes processes
+    opening the same old file at once; the loser re-reads the upgraded schema."""
+    # Only changeable outside a transaction. With foreign keys off and legacy_alter_table
+    # on, the watchlists rebuild keeps child tables pointing at `watchlists`.
+    db.execute("PRAGMA foreign_keys = OFF")
+    db.execute("PRAGMA legacy_alter_table = ON")
+    try:
+        db.execute("BEGIN IMMEDIATE")
+        try:
+            cols = {t: _columns(db, t) for t in ("runs", "watchlists")}
+            if cols["runs"] and "owner" not in cols["runs"]:
+                db.execute("ALTER TABLE runs ADD COLUMN owner TEXT NOT NULL DEFAULT ''")
+            if cols["watchlists"] and "owner" not in cols["watchlists"]:
+                # Rebuild to swap UNIQUE(name) for UNIQUE(owner, name); ids are kept.
+                db.execute("ALTER TABLE watchlists RENAME TO watchlists_old")
+                db.execute(
+                    "CREATE TABLE watchlists (id INTEGER PRIMARY KEY AUTOINCREMENT,"
+                    " name TEXT NOT NULL, horizon TEXT NOT NULL, created_at TEXT NOT NULL,"
+                    " owner TEXT NOT NULL DEFAULT '', UNIQUE (owner, name))"
+                )
+                db.execute(
+                    "INSERT INTO watchlists (id, name, horizon, created_at)"
+                    " SELECT id, name, horizon, created_at FROM watchlists_old"
+                )
+                db.execute("DROP TABLE watchlists_old")
+            db.execute("COMMIT")
+        except BaseException:
+            db.execute("ROLLBACK")
+            raise
+    finally:
+        db.execute("PRAGMA legacy_alter_table = OFF")
+        db.execute("PRAGMA foreign_keys = ON")
+
 
 def default_db_path() -> str:
     return os.environ.get(DB_ENV) or str(DEFAULT_DB)
@@ -78,12 +130,16 @@ class RunStore:
         self._db = sqlite3.connect(self.path, check_same_thread=False)
         self._db.row_factory = sqlite3.Row
         self._db.execute("PRAGMA foreign_keys = ON")
-        with self._lock, self._db:
+        with self._lock:
             if self.path != ":memory:":
                 self._db.execute("PRAGMA journal_mode=WAL")
+            _migrate(self._db)  # before the schema script, which indexes `owner`
             self._db.executescript(_SCHEMA)
+            _migrate(self._db)
+            self._db.commit()
 
-    def save(self, r: AnalysisResult) -> None:
+    def save(self, r: AnalysisResult, owner: str = "") -> None:
+        """Insert or update a run. `owner` is set on insert only; updates keep it."""
         row = (
             r.run_id,
             r.request.ticker,
@@ -95,32 +151,46 @@ class RunStore:
             len(r.quality_gate_failures),
             r.error,
             r.model_dump_json(),
+            owner,
         )
+        updates = ", ".join(f"{c} = excluded.{c}" for c in _RUN_COLS.split(", ")[1:])
         with self._lock, self._db:
-            self._db.execute("INSERT OR REPLACE INTO runs VALUES (?,?,?,?,?,?,?,?,?,?)", row)
+            self._db.execute(
+                f"INSERT INTO runs ({_RUN_COLS}, owner) VALUES (?,?,?,?,?,?,?,?,?,?,?) "
+                f"ON CONFLICT(run_id) DO UPDATE SET {updates}",
+                row,
+            )
 
     def set_status(self, run_id: str, status: RunStatus) -> None:
         # Only the summary column; the JSON is rewritten when the run finishes.
         with self._lock, self._db:
             self._db.execute("UPDATE runs SET status = ? WHERE run_id = ?", (status.value, run_id))
 
-    def get(self, run_id: str) -> AnalysisResult | None:
+    def get(self, run_id: str, owner: str | None = None) -> AnalysisResult | None:
         with self._lock:
             row = self._db.execute(
-                "SELECT status, result_json FROM runs WHERE run_id = ?", (run_id,)
+                "SELECT status, result_json, owner FROM runs WHERE run_id = ?", (run_id,)
             ).fetchone()
-        if row is None:
+        if row is None or (owner is not None and row["owner"] != owner):
             return None
         r = AnalysisResult.model_validate_json(row["result_json"])
         r.status = RunStatus(row["status"])
         return r
 
-    def list_runs(self, ticker: str | None = None, limit: int = 200) -> list[dict[str, Any]]:
+    def list_runs(
+        self, ticker: str | None = None, limit: int = 200, owner: str | None = None
+    ) -> list[dict[str, Any]]:
         sql = "SELECT * FROM runs"
+        where: list[str] = []
         args: list[Any] = []
         if ticker:
-            sql += " WHERE ticker = ?"
+            where.append("ticker = ?")
             args.append(ticker)
+        if owner is not None:
+            where.append("owner = ?")
+            args.append(owner)
+        if where:
+            sql += " WHERE " + " AND ".join(where)
         sql += " ORDER BY started_at DESC LIMIT ?"
         args.append(limit)
         with self._lock:
@@ -162,12 +232,12 @@ class RunStore:
         return len(rows)
 
     # ---------- watchlists ----------
-    def create_watchlist(self, name: str, horizon: str, tickers: list[str]) -> int:
+    def create_watchlist(self, name: str, horizon: str, tickers: list[str], owner: str = "") -> int:
         now = utc_now().isoformat()
         with self._lock, self._db:
             cur = self._db.execute(
-                "INSERT INTO watchlists (name, horizon, created_at) VALUES (?,?,?)",
-                (name, horizon, now),
+                "INSERT INTO watchlists (name, horizon, created_at, owner) VALUES (?,?,?,?)",
+                (name, horizon, now, owner),
             )
             wl_id = int(cur.lastrowid or 0)
             self._db.executemany(
@@ -177,21 +247,23 @@ class RunStore:
             )
         return wl_id
 
-    def list_watchlists(self) -> list[dict[str, Any]]:
+    def list_watchlists(self, owner: str | None = None) -> list[dict[str, Any]]:
+        where, args = ("WHERE w.owner = ? ", (owner,)) if owner is not None else ("", ())
         with self._lock:
             rows = self._db.execute(
                 "SELECT w.*, "
                 "(SELECT COUNT(*) FROM watchlist_items i WHERE i.watchlist_id = w.id) AS n_items, "
                 "(SELECT COUNT(*) FROM alerts a WHERE a.watchlist_id = w.id "
                 " AND a.acknowledged = 0) AS open_alerts "
-                "FROM watchlists w ORDER BY w.name"
+                f"FROM watchlists w {where}ORDER BY w.name",
+                args,
             ).fetchall()
         return [dict(r) for r in rows]
 
-    def get_watchlist(self, wl_id: int) -> dict[str, Any] | None:
+    def get_watchlist(self, wl_id: int, owner: str | None = None) -> dict[str, Any] | None:
         with self._lock:
             wl = self._db.execute("SELECT * FROM watchlists WHERE id = ?", (wl_id,)).fetchone()
-            if wl is None:
+            if wl is None or (owner is not None and wl["owner"] != owner):
                 return None
             items = self._db.execute(
                 "SELECT ticker, added_at, last_run_id, last_checked_at, last_error, "
@@ -203,9 +275,14 @@ class RunStore:
         out["items"] = [dict(i, has_baseline=bool(i["has_baseline"])) for i in items]
         return out
 
-    def delete_watchlist(self, wl_id: int) -> bool:
+    def delete_watchlist(self, wl_id: int, owner: str | None = None) -> bool:
+        sql = "DELETE FROM watchlists WHERE id = ?"
+        args: list[Any] = [wl_id]
+        if owner is not None:
+            sql += " AND owner = ?"
+            args.append(owner)
         with self._lock, self._db:
-            cur = self._db.execute("DELETE FROM watchlists WHERE id = ?", (wl_id,))
+            cur = self._db.execute(sql, args)
         return cur.rowcount > 0
 
     def add_item(self, wl_id: int, ticker: str) -> None:
@@ -322,10 +399,18 @@ class RunStore:
         return int(cur.lastrowid or 0)
 
     def list_alerts(
-        self, wl_id: int | None = None, include_acknowledged: bool = False, limit: int = 200
+        self,
+        wl_id: int | None = None,
+        include_acknowledged: bool = False,
+        limit: int = 200,
+        owner: str | None = None,
     ) -> list[dict[str, Any]]:
         sql = "SELECT a.*, w.name AS watchlist FROM alerts a JOIN watchlists w ON w.id = a.watchlist_id"
-        where, args = [], []
+        where: list[str] = []
+        args: list[Any] = []
+        if owner is not None:
+            where.append("w.owner = ?")
+            args.append(owner)
         if wl_id is not None:
             where.append("a.watchlist_id = ?")
             args.append(wl_id)
@@ -345,9 +430,14 @@ class RunStore:
             out.append(d)
         return out
 
-    def ack_alert(self, alert_id: int) -> bool:
+    def ack_alert(self, alert_id: int, owner: str | None = None) -> bool:
+        sql = "UPDATE alerts SET acknowledged = 1 WHERE id = ?"
+        args: list[Any] = [alert_id]
+        if owner is not None:
+            sql += " AND watchlist_id IN (SELECT id FROM watchlists WHERE owner = ?)"
+            args.append(owner)
         with self._lock, self._db:
-            cur = self._db.execute("UPDATE alerts SET acknowledged = 1 WHERE id = ?", (alert_id,))
+            cur = self._db.execute(sql, args)
         return cur.rowcount > 0
 
     def close(self) -> None:

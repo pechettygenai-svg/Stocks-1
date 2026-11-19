@@ -48,6 +48,9 @@ def analyze(
 @app.command("watch-check")
 def watch_check(
     name: str | None = typer.Option(None, help="Only this watchlist (default: all)"),
+    owner: str | None = typer.Option(
+        None, help="Only this owner's watchlists, e.g. u7 for site user 7 (default: all)"
+    ),
     db: str | None = typer.Option(None, help="SQLite file (default: $STOCK_FORECASTER_DB)"),
 ) -> None:
     """Re-run watchlists (e.g. from cron). Prints alerts; exit code 3 if any fired."""
@@ -55,9 +58,15 @@ def watch_check(
     from .watch import check_watchlist  # noqa: PLC0415
 
     store = RunStore(db)
-    lists = [w for w in store.list_watchlists() if name is None or w["name"] == name]
+    lists = [w for w in store.list_watchlists(owner=owner) if name is None or w["name"] == name]
     if not lists:
         typer.echo("no matching watchlists", err=True)
+        raise typer.Exit(code=1)
+    if name is not None and len(lists) > 1:
+        owners = ", ".join(repr(w["owner"]) for w in lists)
+        typer.echo(
+            f"several watchlists are named {name!r} (owners {owners}); add --owner", err=True
+        )
         raise typer.Exit(code=1)
     fired = 0
     for wl in lists:
