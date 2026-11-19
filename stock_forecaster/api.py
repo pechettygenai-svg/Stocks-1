@@ -8,12 +8,13 @@ import uuid
 from pathlib import Path
 from typing import Annotated, Any
 
-from fastapi import BackgroundTasks, Depends, FastAPI, Header, HTTPException
+from fastapi import BackgroundTasks, Depends, FastAPI, Header, HTTPException, Query
 from fastapi.responses import FileResponse, PlainTextResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 from pydantic import Field as PField
 
+from . import quotes as quotes_mod
 from .models import (
     DISCLAIMER,
     AnalysisRequest,
@@ -261,6 +262,28 @@ def ack_alert(alert_id: int, owner: Owner) -> dict[str, Any]:
     if not get_store().ack_alert(alert_id, owner):
         raise HTTPException(404, "alert not found")
     return {"id": alert_id, "acknowledged": True}
+
+
+@app.get("/v1/quotes")
+def get_quotes(
+    tickers: Annotated[str, Query(description="Comma-separated symbols, e.g. AAPL,MSFT")],
+) -> dict[str, Any]:
+    """Latest price per ticker (for valuing a portfolio). Unknown symbols come back
+    with status "unavailable" rather than failing the request."""
+    wanted: list[str] = []
+    for raw in tickers.split(","):
+        t = raw.strip().upper()
+        if not t:
+            continue
+        if not quotes_mod.VALID_TICKER.match(t):
+            raise HTTPException(422, f"invalid ticker: {t[:20]!r}")
+        if t not in wanted:
+            wanted.append(t)
+    if not wanted:
+        raise HTTPException(422, "no tickers given")
+    if len(wanted) > quotes_mod.MAX_TICKERS:
+        raise HTTPException(422, f"at most {quotes_mod.MAX_TICKERS} tickers per request")
+    return {"source": quotes_mod.SOURCE_NOTE, "quotes": quotes_mod.get_quotes(wanted)}
 
 
 @app.get("/healthz")
