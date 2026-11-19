@@ -16,6 +16,7 @@ from pydantic import Field as PField
 
 from . import movers as movers_mod
 from . import quotes as quotes_mod
+from . import symbol_data
 from .models import (
     DISCLAIMER,
     AnalysisRequest,
@@ -263,6 +264,39 @@ def ack_alert(alert_id: int, owner: Owner) -> dict[str, Any]:
     if not get_store().ack_alert(alert_id, owner):
         raise HTTPException(404, "alert not found")
     return {"id": alert_id, "acknowledged": True}
+
+
+@app.get("/v1/symbol/{ticker}/{section}")
+def get_symbol_section(
+    ticker: str,
+    section: Literal[
+        "overview",
+        "financials",
+        "filings",
+        "news",
+        "technicals",
+        "forecasts",
+        "seasonals",
+        "options",
+        "etfs",
+    ],
+    expiry: Annotated[str | None, Query(pattern=r"^\d{4}-\d{2}-\d{2}$")] = None,
+    etfs: Annotated[str, Query(description="Extra ETFs to check, comma-separated")] = "",
+) -> dict[str, Any]:
+    """One tab of the stock page. Sections that can't be loaded come back with
+    status "unavailable" and an error rather than failing the request."""
+    t = ticker.strip().upper()
+    if not quotes_mod.VALID_TICKER.match(t):
+        raise HTTPException(422, f"invalid ticker: {t[:20]!r}")
+    kw: dict[str, Any] = {}
+    if section == "options":
+        kw["expiry"] = expiry
+    if section == "etfs":
+        extra = [e.strip().upper() for e in etfs.split(",") if e.strip()]
+        if len(extra) > 40 or any(not quotes_mod.VALID_TICKER.match(e) for e in extra):
+            raise HTTPException(422, "etfs must be at most 40 valid symbols")
+        kw["extra"] = extra
+    return symbol_data.get_section(section, normalize_ticker(t), **kw)
 
 
 @app.get("/v1/movers")
