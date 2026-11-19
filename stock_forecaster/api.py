@@ -6,7 +6,7 @@ import sqlite3
 import threading
 import uuid
 from pathlib import Path
-from typing import Annotated, Any
+from typing import Annotated, Any, Literal
 
 from fastapi import BackgroundTasks, Depends, FastAPI, Header, HTTPException, Query
 from fastapi.responses import FileResponse, PlainTextResponse
@@ -14,6 +14,7 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 from pydantic import Field as PField
 
+from . import movers as movers_mod
 from . import quotes as quotes_mod
 from .models import (
     DISCLAIMER,
@@ -262,6 +263,16 @@ def ack_alert(alert_id: int, owner: Owner) -> dict[str, Any]:
     if not get_store().ack_alert(alert_id, owner):
         raise HTTPException(404, "alert not found")
     return {"id": alert_id, "acknowledged": True}
+
+
+@app.get("/v1/movers")
+def get_movers(
+    kind: Literal["gainers", "losers", "active"] = "gainers",
+    count: Annotated[int, Query(ge=1, le=movers_mod.MAX_COUNT)] = 25,
+) -> dict[str, Any]:
+    """Today's biggest US gainers, losers or most-active stocks (Yahoo screener). If Yahoo
+    can't be reached the response has status "unavailable" and an empty list."""
+    return movers_mod.get_movers(kind, count)
 
 
 @app.get("/v1/quotes")
