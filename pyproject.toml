@@ -15,7 +15,7 @@ dependencies = [
     "typer>=0.9,<1",
     "fastapi>=0.104,<1",
     "uvicorn>=0.24,<1",
-    "yfinance>=0.2.40",
+    "yfinance>=0.2.58",  # yf.screen(name, count=...) for /v1/movers
 ]
 
 [project.optional-dependencies]
